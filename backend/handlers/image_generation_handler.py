@@ -59,6 +59,7 @@ class ImageGenerationHandler(StateHandlerBase):
 
             seed = self._resolve_seed()
             use_fal_api = should_image_generate_with_fal_api(
+                cloud_api_enabled=self.config.cloud_api_enabled,
                 force_api_generations=self.config.force_api_generations,
                 settings=self.state.app_settings,
             )

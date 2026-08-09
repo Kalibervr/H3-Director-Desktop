@@ -62,6 +62,7 @@ def test_state(tmp_path: Path, fake_services: FakeServices):
         dev_mode=False,
         hf_oauth_client_id="test-client-id",
         backend_port=PORT,
+        cloud_api_enabled=True,
     )
 
     bundle = ServiceBundle(

@@ -122,7 +122,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const [modelLicenseText, setModelLicenseText] = useState<string | null>(null)
   const [modelLicenseLoading, setModelLicenseLoading] = useState(false)
   const [showModelLicense, setShowModelLicense] = useState(false)
-  const [analyticsEnabled, setAnalyticsEnabled] = useState(false)
+  const analyticsEnabled = false
   const [projectAssetsPath, setProjectAssetsPath] = useState('')
 
   // Sync active tab with initialTab prop when modal opens
@@ -146,12 +146,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     window.electronAPI.getAppInfo().then(info => setAppVersion(info.version)).catch(() => {})
   }, [activeTab, appVersion])
 
-  // Fetch analytics state when modal opens
   useEffect(() => {
     if (!isOpen) return
-    window.electronAPI.getAnalyticsState()
-      .then((state: { analyticsEnabled: boolean }) => setAnalyticsEnabled(state.analyticsEnabled))
-      .catch(() => {})
     window.electronAPI.getProjectAssetsPath()
       .then((p: string) => setProjectAssetsPath(p))
       .catch(() => {})
@@ -262,12 +258,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
       onSettingsChange({ ...settings, promptEnhancerEnabledI2V: !settings.promptEnhancerEnabledI2V })
     }
   }
-  // Analytics handler
-  const handleToggleAnalytics = () => {
-    const next = !analyticsEnabled
-    setAnalyticsEnabled(next)
-    window.electronAPI.setAnalyticsEnabled({ enabled: next }).catch(() => {})
-  }
+  const handleToggleAnalytics = () => {}
 
   // Seed handlers
   const handleToggleSeedLock = () => {
@@ -323,7 +314,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     // The Models tab is local-model management — irrelevant (and non-functional) when all
     // generation is forced through the API, so hide it in that mode.
     ...(!forceApiGenerations ? [{ id: 'models' as TabId, label: 'Models', icon: HardDrive }] : []),
-    { id: 'apiKeys' as TabId, label: 'API Keys', icon: KeyRound },
     { id: 'promptEnhancer' as TabId, label: 'Prompt Enhancer', icon: Sparkles },
     { id: 'about' as TabId, label: 'About', icon: Info },
   ]
@@ -770,8 +760,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                 </div>
               </div>
 
-              {/* Anonymous Analytics Setting */}
-              <div className="space-y-3 pt-4 border-t border-zinc-800">
+              {/* Telemetry is disabled in the H3 local-only build. */}
+              {false && <div className="space-y-3 pt-4 border-t border-zinc-800">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
@@ -805,13 +795,13 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                   </button>
                 </div>
 
-              </div>
+              </div>}
             </>
           )}
 
           {activeTab === 'models' && !forceApiGenerations && <BaseModelSection />}
 
-          {activeTab === 'apiKeys' && (
+          {false && activeTab === 'apiKeys' && (
             <>
               {/* LTX API Key Section */}
               <div className="space-y-4">

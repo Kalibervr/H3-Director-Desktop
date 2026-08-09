@@ -64,6 +64,7 @@ class RetakeHandler(StateHandlerBase):
         video_file = validate_source_video_path(video_path)
 
         if should_video_generate_with_ltx_api(
+            cloud_api_enabled=self.config.cloud_api_enabled,
             force_api_generations=self.config.force_api_generations,
             settings=self.state.app_settings,
         ):

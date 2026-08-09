@@ -155,14 +155,22 @@ def to_settings_response(settings: AppSettings) -> SettingsResponse:
     return SettingsResponse.model_validate(data)
 
 
-def should_video_generate_with_ltx_api(*, force_api_generations: bool, settings: AppSettings) -> bool:
+def should_video_generate_with_ltx_api(
+    *, cloud_api_enabled: bool, force_api_generations: bool, settings: AppSettings
+) -> bool:
+    if not cloud_api_enabled:
+        return False
     has_ltx_api_key = bool(settings.ltx_api_key.strip())
     return force_api_generations or (
         settings.user_prefers_ltx_api_video_generations and has_ltx_api_key
     )
 
 
-def should_image_generate_with_fal_api(*, force_api_generations: bool, settings: AppSettings) -> bool:
+def should_image_generate_with_fal_api(
+    *, cloud_api_enabled: bool, force_api_generations: bool, settings: AppSettings
+) -> bool:
+    if not cloud_api_enabled:
+        return False
     has_fal_api_key = bool(settings.fal_api_key.strip())
     return force_api_generations or (
         settings.user_prefers_fal_api_image_generations and has_fal_api_key

@@ -28,8 +28,10 @@ class RuntimeConfig:
     lora_catalog_source: str = ""
     # Bundled catalog used as a fallback when lora_catalog_source is a URL that fails to fetch.
     lora_catalog_fallback_path: str = ""
+    # H3 Phase 1 is local-only. Tests may opt in to exercise retained legacy adapters.
+    cloud_api_enabled: bool = False
 
     @property
     def force_api_generations(self) -> bool:
         """Derived: local generation is unavailable for this runtime."""
-        return self.local_generations_mode == "unsupported"
+        return self.cloud_api_enabled and self.local_generations_mode == "unsupported"

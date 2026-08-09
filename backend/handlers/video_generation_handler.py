@@ -87,6 +87,7 @@ class VideoGenerationHandler(StateHandlerBase):
 
     def generate(self, req: GenerateVideoRequest) -> GenerateVideoResponse:
         use_api_specs = should_video_generate_with_ltx_api(
+            cloud_api_enabled=self.config.cloud_api_enabled,
             force_api_generations=self.config.force_api_generations,
             settings=self.state.app_settings,
         )

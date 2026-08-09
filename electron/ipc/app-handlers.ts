@@ -5,7 +5,6 @@ import { checkGPU } from '../gpu'
 import { isPythonReady, downloadPythonEmbed } from '../python-setup'
 import { getBackendHealthStatus, getBackendUrl, getAuthToken, getAdminToken, startPythonBackend, setGenerationActive } from '../python-backend'
 import { getMainWindow } from '../window'
-import { getAnalyticsState, setAnalyticsEnabled, sendAnalyticsEvent } from '../analytics'
 import { handle } from './typed-handle'
 
 function getModelsPath(): string {
@@ -150,18 +149,6 @@ export function registerAppHandlers(): void {
 
   handle('notifyGenerationActive', ({ active }) => {
     setGenerationActive(active)
-  })
-
-  handle('getAnalyticsState', () => {
-    return getAnalyticsState()
-  })
-
-  handle('setAnalyticsEnabled', ({ enabled }) => {
-    setAnalyticsEnabled(enabled)
-  })
-
-  handle('sendAnalyticsEvent', async ({ eventName, extraDetails }) => {
-    await sendAnalyticsEvent(eventName, extraDetails)
   })
 
   handle('openModelsDirChangeDialog', async () => {

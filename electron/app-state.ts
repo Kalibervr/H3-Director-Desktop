@@ -3,8 +3,6 @@ import fs from 'fs'
 import path from 'path'
 
 export interface AppState {
-  analyticsEnabled?: boolean
-  installationId?: string
   projectAssetsPath?: string
   [key: string]: unknown
 }

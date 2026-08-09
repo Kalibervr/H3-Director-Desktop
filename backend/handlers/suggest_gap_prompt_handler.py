@@ -50,6 +50,8 @@ class SuggestGapPromptHandler(StateHandlerBase):
         self._http = http
 
     def suggest_gap(self, req: SuggestGapPromptRequest) -> SuggestGapPromptResponse:
+        if not self.config.cloud_api_enabled:
+            raise HTTPError(403, "CLOUD_API_DISABLED_LOCAL_ONLY")
         before_frame = _read_image_file_as_base64(req.beforeFrame)
         after_frame = _read_image_file_as_base64(req.afterFrame)
         input_image = _read_image_file_as_base64(req.inputImage)

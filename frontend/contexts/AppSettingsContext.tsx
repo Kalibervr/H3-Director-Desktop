@@ -100,7 +100,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS)
   const [isLoaded, setIsLoaded] = useState(false)
   const [runtimePolicyLoaded, setRuntimePolicyLoaded] = useState(false)
-  const [forceApiGenerations, setForceApiGenerations] = useState(true)
+  const [forceApiGenerations, setForceApiGenerations] = useState(false)
   const [cudaAvailable, setCudaAvailable] = useState(false)
   const [backendProcessStatus, setBackendProcessStatus] = useState<BackendProcessStatus | null>(null)
 
@@ -115,7 +115,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       if (!result.ok) {
         if (!cancelled) {
           // Fail closed until policy can be read.
-          setForceApiGenerations(true)
+          setForceApiGenerations(false)
           setRuntimePolicyLoaded(true)
         }
         return
@@ -124,7 +124,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       const payload = result.data as RuntimePolicyPayload
       if (typeof payload.force_api_generations !== 'boolean') {
         if (!cancelled) {
-          setForceApiGenerations(true)
+          setForceApiGenerations(false)
         }
       } else if (!cancelled) {
         setForceApiGenerations(payload.force_api_generations)
@@ -272,10 +272,9 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     await refreshSettings()
   }, [refreshSettings])
 
-  const shouldVideoGenerateWithLtxApi =
-    forceApiGenerations || (settings.userPrefersLtxApiVideoGenerations && settings.hasLtxApiKey)
-  const shouldImageGenerateWithFalApi =
-    forceApiGenerations || (settings.userPrefersFalApiImageGenerations && settings.hasFalApiKey)
+  // H3 Phase 1 never selects retained cloud generation adapters.
+  const shouldVideoGenerateWithLtxApi = false
+  const shouldImageGenerateWithFalApi = false
 
   const contextValue = useMemo<AppSettingsContextValue>(
     () => ({

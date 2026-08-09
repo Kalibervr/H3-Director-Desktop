@@ -312,19 +312,6 @@ export const electronAPISchemas = {
     output: ipcResult({}),
   },
 
-  // Analytics
-  getAnalyticsState: {
-    input: z.object({}),
-    output: z.object({ analyticsEnabled: z.boolean(), installationId: z.string() }),
-  },
-  setAnalyticsEnabled: {
-    input: z.object({ enabled: z.boolean() }),
-    output: z.void(),
-  },
-  sendAnalyticsEvent: {
-    input: z.object({ eventName: z.string(), extraDetails: z.record(z.string(), z.unknown()).nullable().optional() }),
-    output: z.void(),
-  },
 } as const
 
 type Schemas = typeof electronAPISchemas

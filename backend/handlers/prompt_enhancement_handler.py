@@ -160,6 +160,8 @@ class PromptEnhancementHandler(StateHandlerBase):
 
         seed = self._random_seed()
         if req.provider == "api":
+            if not self.config.cloud_api_enabled:
+                raise HTTPError(403, "CLOUD_API_DISABLED_LOCAL_ONLY")
             logger.info("Enhancing prompt via Gemini API")
             api_key = self.state.app_settings.gemini_api_key
             if req.imagePath is not None:
@@ -188,6 +190,8 @@ class PromptEnhancementHandler(StateHandlerBase):
         seed = self._random_seed()
         try:
             if req.provider == "api":
+                if not self.config.cloud_api_enabled:
+                    raise HTTPError(403, "CLOUD_API_DISABLED_LOCAL_ONLY")
                 logger.info("Enhancing prompt via Gemini API")
                 raw = self._gemini_pipeline.enhance_t2v(
                     req.prompt,
