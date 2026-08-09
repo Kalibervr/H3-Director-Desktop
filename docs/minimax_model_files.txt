@@ -1,0 +1,14 @@
+# Sanitized model-file inventory.
+# Paths are relative to the ComfyUI models directory; the machine-specific root has been removed.
+
+RelativePath                                                        Length
+------------                                                        ------
+audio_encoders\put_audio_encoder_models_here                            0
+clip\put_clip_or_text_encoder_models_here                               0
+clip_vision\put_clip_vision_models_here                                 0
+configs\v1-inference_clip_skip_2.yaml                                1933
+configs\v1-inference_clip_skip_2_fp16.yaml                           1956
+embeddings\put_embeddings_or_textual_inversion_concepts_here            0
+text_encoders\put_text_encoder_files_here                               0
+vae\put_vae_here                                                        0
+vae_approx\put_taesd_encoder_pth_and_taesd_decoder_pth_here             0
