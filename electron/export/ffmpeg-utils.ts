@@ -8,7 +8,21 @@ import { getPythonDir } from '../python-setup'
 
 let activeExportProcess: ChildProcess | null = null
 
-export function findFfmpegPath(): string | null {
+type MediaToolName = 'ffmpeg' | 'ffprobe'
+
+export interface MediaToolCapability {
+  available: boolean
+  path: string | null
+  version: string | null
+  error?: string
+}
+
+export interface MediaToolCapabilities {
+  ffmpeg: MediaToolCapability
+  ffprobe: MediaToolCapability
+}
+
+function findMediaToolPath(tool: MediaToolName): string | null {
   let binDir: string | null = null
 
   if (process.platform === 'win32') {
@@ -31,11 +45,50 @@ export function findFfmpegPath(): string | null {
   }
 
   if (binDir && fs.existsSync(binDir)) {
-    const bin = fs.readdirSync(binDir).find(f => f.startsWith('ffmpeg'))
+    const entries = fs.readdirSync(binDir)
+    const exactName = process.platform === 'win32' ? `${tool}.exe` : tool
+    const bin = entries.find(f => f.toLowerCase() === exactName)
+      ?? entries.find(f => f.toLowerCase().startsWith(`${tool}-`))
     if (bin) return path.join(binDir, bin)
   }
 
-  try { execSync('ffmpeg -version', { stdio: 'ignore' }); return 'ffmpeg' } catch { return null }
+  // Windows production and development builds must use the verified local bundle.
+  // Other platforms retain the existing system-tool fallback until their packaging
+  // strategy is made explicit.
+  if (process.platform === 'win32') return null
+
+  try { execSync(`${tool} -version`, { stdio: 'ignore' }); return tool } catch { return null }
+}
+
+export function findFfmpegPath(): string | null {
+  return findMediaToolPath('ffmpeg')
+}
+
+export function findFfprobePath(): string | null {
+  return findMediaToolPath('ffprobe')
+}
+
+function checkMediaTool(tool: MediaToolName): MediaToolCapability {
+  const resolvedPath = findMediaToolPath(tool)
+  if (!resolvedPath) {
+    return { available: false, path: null, version: null, error: `${tool} not found in the verified local bundle` }
+  }
+
+  const result = spawnSync(resolvedPath, ['-version'], { encoding: 'utf8', timeout: 5000 })
+  if (result.status !== 0) {
+    const detail = result.error?.message || result.stderr?.trim() || `exit code ${result.status}`
+    return { available: false, path: resolvedPath, version: null, error: detail }
+  }
+
+  const version = (result.stdout || result.stderr || '').split(/\r?\n/, 1)[0]?.trim() || null
+  return { available: true, path: resolvedPath, version }
+}
+
+export function checkMediaToolCapabilities(): MediaToolCapabilities {
+  return {
+    ffmpeg: checkMediaTool('ffmpeg'),
+    ffprobe: checkMediaTool('ffprobe'),
+  }
 }
 
 /** Check if a video file contains an audio stream using ffprobe/ffmpeg */

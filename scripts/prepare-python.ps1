@@ -150,6 +150,15 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "All dependencies installed" -ForegroundColor Green
 
+# imageio-ffmpeg only includes ffmpeg. Provision the verified, version-pinned
+# FFmpeg/ffprobe pair into the same local binaries directory used at runtime.
+$MediaToolsScript = Join-Path $ScriptDir "prepare-media-tools.ps1"
+& $MediaToolsScript -DestinationRoot $OutputPath
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: verified FFmpeg/ffprobe provisioning failed!" -ForegroundColor Red
+    exit 1
+}
+
 # ============================================================
 # Step 7: Copy Python headers for Triton/SageAttention JIT
 # ============================================================

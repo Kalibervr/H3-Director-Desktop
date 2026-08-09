@@ -2,7 +2,7 @@ import './app-paths'
 import { app } from 'electron'
 import { setupCSP } from './csp'
 import { registerExportHandlers } from './export/export-handler'
-import { stopExportProcess } from './export/ffmpeg-utils'
+import { checkMediaToolCapabilities, stopExportProcess } from './export/ffmpeg-utils'
 import { registerAppHandlers } from './ipc/app-handlers'
 import { registerFileHandlers } from './ipc/file-handlers'
 import { registerLogHandlers } from './ipc/log-handlers'
@@ -54,6 +54,12 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     setupCSP()
+    const mediaTools = checkMediaToolCapabilities()
+    logger.info(`[media-tools] ffmpeg: ${JSON.stringify(mediaTools.ffmpeg)}`)
+    logger.info(`[media-tools] ffprobe: ${JSON.stringify(mediaTools.ffprobe)}`)
+    if (!mediaTools.ffmpeg.available || !mediaTools.ffprobe.available) {
+      logger.error('[media-tools] Local FFmpeg capability is incomplete; media export/probing is blocked')
+    }
     createWindow()
     initAutoUpdater()
     // Python setup + backend start are now driven by the renderer via IPC
