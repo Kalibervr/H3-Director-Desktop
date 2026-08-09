@@ -4,6 +4,11 @@ allowBuilds:
   electron-winstaller: true
   iconv-corefoundation: true
 
+overrides:
+  minimatch: ^10.2.3
+  rollup: ^4.59.0
+  tar: ^7.5.11
+
 minimumReleaseAgeExclude:
   - "vite-plugin-electron@0.29.1"
   - "electron@41.0.2"

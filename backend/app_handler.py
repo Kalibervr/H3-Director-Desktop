@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from state.app_settings import AppSettings
 from handlers import (
     ComfyUIRuntimeHandler,
+    ComfyUIMiniMaxH3Handler,
     DownloadHandler,
     GenerationHandler,
     HealthHandler,
@@ -201,6 +202,7 @@ class AppHandler:
 
         self.runtime_policy = RuntimePolicyHandler(config=config)
         self.comfyui_runtime = ComfyUIRuntimeHandler()
+        self.comfyui_minimax_h3 = ComfyUIMiniMaxH3Handler()
 
         self.suggest_gap_prompt = SuggestGapPromptHandler(
             state=self.state,

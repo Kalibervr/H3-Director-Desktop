@@ -1,5 +1,5 @@
-appId: com.lightricks.ltx-desktop
-productName: LTX Desktop
+appId: com.kalibervr.h3-director-desktop
+productName: H3 Director Desktop
 copyright: Copyright © 2026 Lightricks
 
 directories:
@@ -32,6 +32,8 @@ extraResources:
       - "!tests/**"
   - from: python-deps-hash.txt
     to: python-deps-hash.txt
+  - from: workflows/minimax_h3_single_scene_api.json
+    to: workflows/minimax_h3_single_scene_api.json
 
 win:
   target:
@@ -50,7 +52,7 @@ nsis:
   installerHeaderIcon: resources/icon.ico
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: LTX Desktop
+  shortcutName: H3 Director Desktop
 
 mac:
   hardenedRuntime: true
@@ -118,5 +120,5 @@ deb:
 
 publish:
   provider: github
-  owner: Lightricks
-  repo: ltx-desktop
+  owner: Kalibervr
+  repo: H3-Director-Desktop

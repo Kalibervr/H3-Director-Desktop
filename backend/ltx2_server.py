@@ -326,7 +326,7 @@ if __name__ == "__main__":
 
     port = runtime_config.backend_port
     logger.info("=" * 60)
-    logger.info("LTX-2 Video Generation Server (FastAPI + Uvicorn)")
+    logger.info("H3 Director Desktop Local Backend (FastAPI + Uvicorn)")
     log_hardware_info()
     logger.info("=" * 60)
 

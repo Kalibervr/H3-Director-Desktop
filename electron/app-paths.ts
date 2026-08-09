@@ -2,7 +2,7 @@ import { app } from 'electron'
 import path from 'path'
 import os from 'os'
 
-export const APP_FOLDER_NAME = 'LTXDesktop'
+export const APP_FOLDER_NAME = 'H3 Director Desktop'
 
 function resolveUserDataPath(): string {
   if (process.platform === 'win32') {
@@ -22,6 +22,7 @@ function resolveUserDataPath(): string {
   return path.join(xdgData, APP_FOLDER_NAME)
 }
 
+app.setName('H3 Director Desktop')
 app.setPath('userData', resolveUserDataPath())
 
 export function getAppDataDir(): string {

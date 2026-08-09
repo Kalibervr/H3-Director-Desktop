@@ -2,6 +2,7 @@
 
 from handlers.download_handler import DownloadHandler
 from handlers.comfyui_runtime_handler import ComfyUIRuntimeHandler
+from handlers.comfyui_minimax_h3_handler import ComfyUIMiniMaxH3Handler
 from handlers.hf_auth_handler import HuggingFaceAuthHandler
 from handlers.generation_handler import GenerationHandler
 from handlers.health_handler import HealthHandler
@@ -22,6 +23,7 @@ from handlers.video_generation_handler import VideoGenerationHandler
 __all__ = [
     "SettingsHandler",
     "ComfyUIRuntimeHandler",
+    "ComfyUIMiniMaxH3Handler",
     "ModelsHandler",
     "DownloadHandler",
     "TextHandler",

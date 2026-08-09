@@ -10,14 +10,13 @@ import { registerVideoProcessingHandlers } from './ipc/video-processing-handlers
 import { logger } from './logger'
 import { initSessionLog } from './logging-management'
 import { stopPythonBackend } from './python-backend'
-import { initAutoUpdater } from './updater'
 import { createWindow, getMainWindow } from './window'
 
 function logAppVersion(): void {
   if (!app.isPackaged) {
-    logger.info('[LTX Desktop] Running in development mode')
+    logger.info('[H3 Director Desktop] Running in development mode')
   } else {
-    logger.info(`[LTX Desktop] Version ${app.getVersion()}`)
+    logger.info(`[H3 Director Desktop] Version ${app.getVersion()}`)
   }
 }
 
@@ -61,7 +60,6 @@ if (!gotLock) {
       logger.error('[media-tools] Local FFmpeg capability is incomplete; media export/probing is blocked')
     }
     createWindow()
-    initAutoUpdater()
     // Python setup + backend start are now driven by the renderer via IPC
 
   })

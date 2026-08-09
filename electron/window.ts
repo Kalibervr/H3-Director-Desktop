@@ -31,6 +31,7 @@ export function createWindow(): BrowserWindow {
       webSecurity: isDev ? false : true,
     },
     backgroundColor: '#1a1a1a',
+    title: 'H3 Director Desktop',
     titleBarStyle: 'default',
     show: false,
   })

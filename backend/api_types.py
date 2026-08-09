@@ -113,6 +113,39 @@ class ComfyUIProbeResponse(BaseModel):
     errors: list[str]
 
 
+class MiniMaxH3RenderRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+    base_url: str = "http://127.0.0.1:8188"
+    prompt: NonEmptyPrompt
+    input_image: str
+    seed: int = Field(ge=0, le=0xFFFFFFFFFFFFFFFF)
+    width: int = Field(default=640, ge=1)
+    height: int = Field(default=640, ge=1)
+    duration_seconds: float = Field(default=5.0, gt=0)
+    fps: int = Field(default=24, ge=1)
+    output_filename_prefix: str = Field(default="MiniMax_H3", min_length=1, max_length=64)
+
+
+class MiniMaxH3VideoProbeResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+    codec: str
+    width: int
+    height: int
+    fps: str
+    duration_seconds: float
+    frame_count: int | None
+    audio_present: bool
+
+
+class MiniMaxH3RenderResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+    status: Literal["complete"] = "complete"
+    prompt_id: str
+    output_file: str
+    metadata_file: str
+    video: MiniMaxH3VideoProbeResponse
+
+
 class GenerationProgressResponse(BaseModel):
     status: Literal["idle", "running", "complete", "cancelled", "error"]
     phase: str

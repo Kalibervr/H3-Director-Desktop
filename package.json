@@ -1,14 +1,14 @@
 {
-  "name": "ltx-desktop",
+  "name": "h3-director-desktop",
   "version": "1.1.0",
-  "description": "LTX-2 Video Generation - Desktop App",
+  "description": "H3 Director Desktop - local cinematic scene generation with ComfyUI and MiniMax H3",
   "type": "module",
   "main": "dist-electron/main.js",
   "author": {
     "name": "Lightricks",
     "email": "ltx-desktop-dev@lightricks.com"
   },
-  "homepage": "https://github.com/Lightricks/LTX-Desktop",
+  "homepage": "https://github.com/Kalibervr/H3-Director-Desktop",
   "license": "Apache-2.0",
   "private": true,
   "packageManager": "pnpm@10.30.3",
@@ -32,7 +32,7 @@
     "prepare:python": "node scripts/run-script.js scripts/prepare-python",
     "build:frontend": "vite build",
     "start:unpacked:mac": "open release/mac-arm64/LTX\\ Desktop.app",
-    "start:unpacked:win": "powershell -Command \"& '.\\release\\win-unpacked\\LTX Desktop.exe'\""
+    "start:unpacked:win": "powershell -Command \"& '.\\release\\win-unpacked\\H3 Director Desktop.exe'\""
   },
   "dependencies": {
     "class-variance-authority": "^0.7.0",
@@ -66,12 +66,5 @@
     "vite": "^7.3.1",
     "vite-plugin-electron": "^0.29.1",
     "vite-plugin-electron-renderer": "^0.14.6"
-  },
-  "pnpm": {
-    "overrides": {
-      "minimatch": "^10.2.3",
-      "rollup": "^4.59.0",
-      "tar": "^7.5.11"
-    }
   }
 }

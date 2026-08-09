@@ -107,19 +107,19 @@ if [ "$UNPACK" = true ]; then
     mac)
       echo ""
       echo "Unpacked app ready!"
-      echo "Run: open \"$RELEASE_DIR/mac-arm64/LTX Desktop.app\""
+      echo "Run: open \"$RELEASE_DIR/mac-arm64/H3 Director Desktop.app\""
       ;;
     win)
       echo ""
       echo "Unpacked app ready!"
-      echo "Run: $RELEASE_DIR/win-unpacked/LTX Desktop.exe"
+      echo "Run: $RELEASE_DIR/win-unpacked/H3 Director Desktop.exe"
       ;;
     linux)
       echo ""
       echo "Unpacked app ready!"
       LINUX_UNPACKED="$RELEASE_DIR/linux-unpacked"
       [ -d "$RELEASE_DIR/linux-arm64-unpacked" ] && LINUX_UNPACKED="$RELEASE_DIR/linux-arm64-unpacked"
-      echo "Run: $LINUX_UNPACKED/ltx-desktop"
+      echo "Run: $LINUX_UNPACKED/h3-director-desktop"
       ;;
   esac
 else
@@ -129,4 +129,4 @@ else
 fi
 
 echo ""
-echo "Note: AI models (~150GB) will be downloaded on first run."
+echo "Note: Phase 1 uses the configured local ComfyUI runtime and does not download models."

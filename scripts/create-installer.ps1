@@ -54,7 +54,7 @@ Write-Host "========================================" -ForegroundColor Green
 
 if ($Unpack) {
     $UnpackedDir = Join-Path $ReleaseDir "win-unpacked"
-    $ExePath = Join-Path $UnpackedDir "LTX Desktop.exe"
+    $ExePath = Join-Path $UnpackedDir "H3 Director Desktop.exe"
     Write-Host "`nUnpacked app ready!" -ForegroundColor Cyan
     Write-Host "Run: $ExePath" -ForegroundColor Cyan
     Write-Host "`nTip: Just restart the app after code changes - no rebuild needed!" -ForegroundColor Green
@@ -68,4 +68,4 @@ if ($Unpack) {
     }
 }
 
-Write-Host "`nNote: AI models (~150GB) will be downloaded on first run." -ForegroundColor Yellow
+Write-Host "`nNote: Phase 1 uses the configured local ComfyUI runtime and does not download models." -ForegroundColor Yellow

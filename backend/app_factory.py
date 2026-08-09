@@ -17,6 +17,7 @@ from starlette.responses import Response as StarletteResponse
 from _routes._errors import HTTPError, build_http_error_response
 from _routes.generation import router as generation_router
 from _routes.comfyui_runtime import router as comfyui_runtime_router
+from _routes.comfyui_minimax_h3 import router as comfyui_minimax_h3_router
 from _routes.hf_auth import router as hf_auth_router
 from _routes.health import router as health_router
 from _routes.ic_lora import router as ic_lora_router
@@ -57,7 +58,7 @@ def create_app(
     *,
     handler: "AppHandler",
     allowed_origins: list[str] | None = None,
-    title: str = "LTX-2 Video Generation Server",
+    title: str = "H3 Director Desktop Local Backend",
     auth_token: str = "",
     admin_token: str = "",
 ) -> FastAPI:
@@ -157,6 +158,7 @@ def create_app(
 
     app.include_router(health_router)
     app.include_router(comfyui_runtime_router)
+    app.include_router(comfyui_minimax_h3_router)
     app.include_router(generation_router)
     app.include_router(models_router)
     app.include_router(settings_router)
