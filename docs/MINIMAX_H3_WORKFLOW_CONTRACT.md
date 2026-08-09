@@ -1,8 +1,8 @@
 # MiniMax H3 Workflow Contract
 
-Status: `READ_ONLY_PROBE_IMPLEMENTED_PROVIDER_NOT_IMPLEMENTED` as of 2026-08-09.
+Status: `REAL_SINGLE_SCENE_PROVIDER_VERIFIED` as of 2026-08-09.
 
-This contract records only facts present in the supplied repository evidence. It does not claim that the workflow has been submitted by H3 Director, that cancellation/progress/output retrieval has been verified, or that a provider is ready.
+This contract records facts from the supplied repository evidence and the first real H3 Director provider execution. It does not claim that cancellation, websocket progress, lifecycle management, restart, cache control, continuity, editor integration, or multi-scene orchestration is implemented.
 
 ## Evidence reviewed
 
@@ -122,14 +122,57 @@ The executed history graph matches the supplied API graph except for two recorde
 
 The history-referenced input exists at `C:\Users\carlj\AppData\Roaming\ComfyUI\input\Gemini_Generated_Image_12xfie12xfie12xf.png`; it is a 2816x1536 PNG, 7,631,107 bytes, SHA-256 `F83ACAA1C04759575B5A6FD1F116F2792919931C038D46AC0C0649B45367F7B8`. It is not the same file as `test-assets/minimax-h3/single_scene_input.jpg`, whose SHA-256 is `6E8A95C0FC94C1F25C844B3EFF02C0DF8824257351E556D3375302DDAF06EAAA`.
 
+## Real H3 Director single-scene provider execution
+
+The development-only `ComfyUIMiniMaxH3Provider` submitted one real render to the already running loopback runtime. The provider hash-verified the immutable API workflow, validated the runtime with the existing probe, uploaded one image, mapped only the verified controls, submitted `/prompt`, polled `/history/{prompt_id}`, resolved output node `92`, verified the MP4 with the bundled ffprobe, and created a collision-safe immutable version directory.
+
+| Property | Verified value |
+|---|---|
+| Runtime URL | `http://127.0.0.1:8188` |
+| Prompt ID | `96bad275-1b6f-48b2-bda3-a4df6286675b` |
+| Input SHA-256 | `6E8A95C0FC94C1F25C844B3EFF02C0DF8824257351E556D3375302DDAF06EAAA` |
+| Upload mapping | `/upload/image` returned a usable basename; history node `114.inputs.image` was `single_scene_input.jpg` |
+| Seed | `193554738272393` |
+| Resolution mapping | Request `640x640`; node `115` retained `aspect_ratio="1:1 (Square)"`, `megapixels=0.4`, `multiple=32`; width/height links remained `115` outputs 0/1 |
+| Duration/frame mapping | `105:111.inputs.value=5.0`; verified expression produced 124 frames |
+| FPS mapping | `105:91.inputs.fps=24` |
+| Requested prefix | Provider-safe prefix under `h3-director/` |
+| Actual descriptor | `filename="MiniMax_H3_c37be849_00001_.mp4"`, `subfolder="h3-director"`, `type="output"` |
+| Source output SHA-256 | `A111284FDF9ECDACEF40D13EEBFA461EB31C8DE9C3FDBC8BB8BE69500D8EC164` |
+| Immutable render | local app-data `development-renders/single-scene/renders/v001/video.mp4` |
+| Metadata | local app-data `development-renders/single-scene/renders/v001/metadata.json` |
+
+The supplied JPG is now proven as the input to this new provider execution by its metadata hash and the history mapping. It remains excluded from the earlier verified-output evidence commit because it did not produce the earlier `91AD...B57D` MP4.
+
+### Sanitized API shapes
+
+- `/upload/image` success: the provider verified string `name` and `subfolder` fields. The initial harness did not retain any additional response keys.
+- `/prompt` request: top-level keys `prompt` and `client_id`; `prompt` contained the 20-node hash-verified API map. Raw graph and prompt content are not logged.
+- `/prompt` success: the provider verified a non-empty string `prompt_id`. The initial harness did not retain any additional response keys.
+- `/history/{prompt_id}` success: top-level key is the prompt ID; record keys are `prompt`, `outputs`, `status`, `meta`; status keys are `status_str`, `completed`, `messages`; output node `92` keys are `images`, `animated`; descriptor keys are `filename`, `subfolder`, `type`.
+- Actual invalid empty `/prompt` request: HTTP 400; top-level keys `error`, `node_errors`; `error` keys `details`, `extra_info`, `message`, `type`; `node_errors` is an object. Raw server error text was not retained or logged.
+- Provider success harness: `status`, `prompt_id`, `output_file`, `metadata_file`, `ffprobe`.
+- Provider failures return fixed human-readable messages and do not include raw workflow JSON, prompts, image/model paths, response bodies, or environment data.
+
+### Actual bundled-ffprobe verification
+
+The new immutable `v001/video.mp4` and the ComfyUI source output are byte-identical with SHA-256 `A111284FDF9ECDACEF40D13EEBFA461EB31C8DE9C3FDBC8BB8BE69500D8EC164`.
+
+| Property | Verified value |
+|---|---|
+| Codec | H.264 (`h264`) |
+| Width / height | 640 / 640 |
+| FPS | `24/1` |
+| Duration | 5.167 seconds |
+| Frame count | 124 |
+| Audio stream | present |
+
 ## Explicitly unresolved
 
 - The exact ComfyUI source commit; the runtime reports version `0.30.2` only.
-- A captured real `/prompt` request and its submission response from H3 Director. Existing history proves a prior external execution but does not document the submission response.
-- Websocket connection/events, progress semantics, cancellation/interruption request and response, cache behavior and representative error payloads.
-- The upload operation and server-side filename mapping from an H3 Director project image to `114.inputs.image`.
-- The relationship between `test-assets/minimax-h3/single_scene_input.jpg` and the successful execution is unresolved; it differs from the history-referenced PNG.
-- Output collision and numbering rules beyond the verified history descriptor `video/MiniMax_H3_00015_.mp4`.
+- Additional `/upload/image` and successful `/prompt` response keys were not retained by the initial harness; only the fields consumed by the provider are verified.
+- Websocket connection/events, progress semantics, cancellation/interruption request and response, and cache behavior.
+- Output collision and numbering rules beyond the two observed successful descriptors. The provider does not depend on ComfyUI numbering for its own immutable `vNNN` folders.
 - A user-facing audio enable/disable mapping; none exists in the workflow.
 - Supported production bounds and validation policy for width, height, seconds and frame count beyond the raw `/object_info` constraints and workflow notes.
 - Cryptographic hashes for all four model files.
@@ -139,8 +182,8 @@ The history-referenced input exists at `C:\Users\carlj\AppData\Roaming\ComfyUI\i
 - Production-safe ComfyUI launch arguments with telemetry, sign-in and remote features disabled. The inspected development process has telemetry explicitly enabled.
 - Automatic discovery, launch, readiness timeout, ownership, restart, log redaction and clean shutdown behavior required by the standalone product constraint; production runtime bundling is intentionally out of scope for this phase.
 
-## Implemented validation boundary
+## Implemented provider boundary
 
-A tested, read-only `ComfyUIRuntimeProbe` and workflow-contract validator now enforce the verified boundary. They accept only loopback HTTP URLs; call only `/system_stats` and `/object_info`; validate all 19 node contracts, exact mapped inputs, audio/video links, output node and four model selections; return sanitized status; and mark telemetry-enabled production configuration incompatible. They do not upload an image, submit `/prompt`, expose the graph in the frontend, or manage/bundle the runtime.
+A tested, read-only `ComfyUIRuntimeProbe` and workflow-contract validator enforce runtime compatibility. The development-only `ComfyUIMiniMaxH3Provider` adds one-image staging, one `/prompt` submission, history polling, safe output discovery, bundled-ffprobe verification, and immutable local render versioning. All ComfyUI connections are loopback HTTP. Neither component exposes the graph in the frontend or manages/bundles the runtime.
 
-Do not implement rendering yet. The next gate is evidence collection for upload naming, a real `/prompt` submission response, websocket/progress events, cancellation/interruption and representative error payloads. Provider submission remains blocked until those contracts are captured and reviewed.
+Do not infer additional controls from this success. Websocket progress, cancellation, lifecycle ownership, restart, cache controls, continuity, editor integration, and multi-scene orchestration remain outside this milestone.
