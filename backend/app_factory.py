@@ -16,6 +16,7 @@ from starlette.responses import Response as StarletteResponse
 
 from _routes._errors import HTTPError, build_http_error_response
 from _routes.generation import router as generation_router
+from _routes.comfyui_runtime import router as comfyui_runtime_router
 from _routes.hf_auth import router as hf_auth_router
 from _routes.health import router as health_router
 from _routes.ic_lora import router as ic_lora_router
@@ -155,6 +156,7 @@ def create_app(
     app.add_exception_handler(Exception, _route_generic_error_handler)
 
     app.include_router(health_router)
+    app.include_router(comfyui_runtime_router)
     app.include_router(generation_router)
     app.include_router(models_router)
     app.include_router(settings_router)

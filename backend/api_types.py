@@ -94,6 +94,25 @@ class RuntimePolicyResponse(BaseModel):
     force_api_generations: bool
 
 
+class ComfyUIProbeRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+    base_url: str
+    workflow: dict[str, JsonValue]
+    production_runtime: bool = False
+
+
+class ComfyUIProbeResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+    status: Literal["connected", "unavailable", "incompatible"]
+    comfyui_version: str | None = None
+    required_nodes_present: list[str]
+    required_nodes_missing: list[str]
+    required_models_present: list[str]
+    required_models_missing: list[str]
+    workflow_contract_valid: bool
+    errors: list[str]
+
+
 class GenerationProgressResponse(BaseModel):
     status: Literal["idle", "running", "complete", "cancelled", "error"]
     phase: str
