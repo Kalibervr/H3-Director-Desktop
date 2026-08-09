@@ -146,6 +146,111 @@ class MiniMaxH3RenderResponse(BaseModel):
     video: MiniMaxH3VideoProbeResponse
 
 
+H3SceneStatus = Literal[
+    "idle", "queued", "preparing", "submitted", "rendering", "encoding",
+    "verifying", "complete", "failed", "cancelled",
+]
+
+
+class H3ProjectSettings(BaseModel):
+    model_config = ConfigDict(strict=True)
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+    fps: int = Field(ge=1)
+    duration_seconds: float = Field(gt=0)
+    frame_count: int = Field(ge=1)
+
+
+class H3RenderVersion(BaseModel):
+    model_config = ConfigDict(strict=True)
+    id: str
+    number: int = Field(ge=1)
+    created_at: str
+    root: str
+    video_file: str
+    metadata_file: str
+    prompt: str
+    input_image_reference: str
+    seed: int = Field(ge=0)
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+    fps: int = Field(ge=1)
+    duration_seconds: float = Field(gt=0)
+    frame_count: int | None
+    prompt_id: str
+    input_image_sha256: str
+    workflow_sha256: str
+    output_sha256: str
+    ffprobe: MiniMaxH3VideoProbeResponse
+
+
+class H3Scene(BaseModel):
+    model_config = ConfigDict(strict=True)
+    id: str
+    order: int = Field(ge=1)
+    name: str = Field(min_length=1, max_length=120)
+    prompt: str
+    reference_image: str | None
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+    fps: int = Field(ge=1)
+    duration_seconds: float = Field(gt=0)
+    frame_count: int = Field(ge=1)
+    seed: int = Field(ge=0, le=0xFFFFFFFFFFFFFFFF)
+    status: H3SceneStatus
+    selected_render_version_id: str | None
+    render_versions: list[H3RenderVersion]
+    last_error: str | None
+    active_prompt_id: str | None
+
+
+class H3Project(BaseModel):
+    model_config = ConfigDict(strict=True)
+    schema_version: Literal[1]
+    id: str
+    name: str = Field(min_length=1, max_length=120)
+    created_at: str
+    updated_at: str
+    project_root: str
+    settings: H3ProjectSettings
+    scenes: list[H3Scene]
+    selected_scene_id: str
+
+
+class H3ProjectCreateRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+    name: str = Field(min_length=1, max_length=120)
+
+
+class H3ProjectUpdateRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+    name: str = Field(min_length=1, max_length=120)
+
+
+class H3ProjectOpenRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+    project_root: str
+
+
+class H3SceneUpdateRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    prompt: str | None = None
+    reference_image: str | None = None
+    width: int | None = Field(default=None, ge=1)
+    height: int | None = Field(default=None, ge=1)
+    fps: int | None = Field(default=None, ge=1)
+    duration_seconds: float | None = Field(default=None, gt=0)
+    frame_count: int | None = Field(default=None, ge=1)
+    seed: int | None = Field(default=None, ge=0, le=0xFFFFFFFFFFFFFFFF)
+    selected_render_version_id: str | None = None
+
+
+class H3ProjectRenderRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+    base_url: str = "http://127.0.0.1:8188"
+
+
 class GenerationProgressResponse(BaseModel):
     status: Literal["idle", "running", "complete", "cancelled", "error"]
     phase: str

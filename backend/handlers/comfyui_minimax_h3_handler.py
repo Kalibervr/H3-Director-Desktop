@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TypeVar
 
 import imageio_ffmpeg
 
 from _routes._errors import HTTPError
 from api_types import (
     ComfyUIProbeResponse,
+    H3Project,
+    H3ProjectCreateRequest,
+    H3ProjectRenderRequest,
+    H3ProjectUpdateRequest,
+    H3RenderVersion,
+    H3SceneUpdateRequest,
     MiniMaxH3RenderRequest,
     MiniMaxH3RenderResponse,
     MiniMaxH3VideoProbeResponse,
@@ -23,6 +30,7 @@ from services.comfyui_minimax_h3_provider import (
     load_verified_workflow,
 )
 from services.comfyui_runtime_probe import ComfyUIRuntimeProbe
+from services.h3_project_store import H3ProjectStore, ProjectStoreError
 
 
 @dataclass(frozen=True)
@@ -38,7 +46,7 @@ def _environment_path(name: str) -> Path | None:
     return Path(value).expanduser() if value else None
 
 
-def resolve_h3_runtime_paths() -> H3RuntimePaths:
+def resolve_h3_runtime_paths(render_root_override: Path | None = None) -> H3RuntimePaths:
     repository_or_resources_root = Path(__file__).resolve().parents[2]
     workflow = _environment_path("H3_MINIMAX_WORKFLOW_PATH") or (
         repository_or_resources_root / "workflows" / "minimax_h3_single_scene_api.json"
@@ -50,7 +58,7 @@ def resolve_h3_runtime_paths() -> H3RuntimePaths:
         raise HTTPError(503, "Required local Windows application-data paths are unavailable.")
 
     comfyui_output = _environment_path("H3_COMFYUI_OUTPUT_DIR") or Path(app_data) / "ComfyUI" / "output"
-    render_root = _environment_path("H3_RENDER_ROOT") or (
+    render_root = render_root_override or _environment_path("H3_RENDER_ROOT") or (
         Path(local_app_data) / "H3 Director Desktop" / "renders" / "single-scene"
     )
     imageio_dir = Path(imageio_ffmpeg.__file__).resolve().parent
@@ -60,6 +68,7 @@ def resolve_h3_runtime_paths() -> H3RuntimePaths:
 
 
 ProviderFactory = Callable[[H3RuntimePaths], ComfyUIMiniMaxH3Provider]
+T = TypeVar("T")
 
 
 def _default_provider_factory(paths: H3RuntimePaths) -> ComfyUIMiniMaxH3Provider:
@@ -76,9 +85,34 @@ class ComfyUIMiniMaxH3Handler:
         self,
         provider_factory: ProviderFactory = _default_provider_factory,
         runtime_probe: ComfyUIRuntimeProbe | None = None,
+        project_store: H3ProjectStore | None = None,
     ) -> None:
         self._provider_factory = provider_factory
         self._runtime_probe = runtime_probe or ComfyUIRuntimeProbe()
+        local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+        if project_store is None and not local_app_data:
+            raise RuntimeError("Required local Windows application-data path is unavailable.")
+        self._project_store = project_store or H3ProjectStore(
+            Path(local_app_data) / "H3 Director Desktop" / "Projects"
+        )
+
+    def list_projects(self) -> list[H3Project]:
+        return self._project_call(self._project_store.list_projects)
+
+    def create_project(self, request: H3ProjectCreateRequest) -> H3Project:
+        return self._project_call(lambda: self._project_store.create_project(request.name))
+
+    def get_project(self, project_id: str) -> H3Project:
+        return self._project_call(lambda: self._project_store.get_project(project_id))
+
+    def reopen_project(self, project_root: str) -> H3Project:
+        return self._project_call(lambda: self._project_store.reopen_project(Path(project_root)))
+
+    def update_project(self, project_id: str, request: H3ProjectUpdateRequest) -> H3Project:
+        return self._project_call(lambda: self._project_store.rename_project(project_id, request.name))
+
+    def update_scene(self, project_id: str, scene_id: str, request: H3SceneUpdateRequest) -> H3Project:
+        return self._project_call(lambda: self._project_store.update_scene(project_id, scene_id, request))
 
     def get_status(self, base_url: str) -> ComfyUIProbeResponse:
         try:
@@ -131,3 +165,81 @@ class ComfyUIMiniMaxH3Handler:
             metadata_file=str(result.metadata_file),
             video=MiniMaxH3VideoProbeResponse(**result.video.__dict__),
         )
+
+    def render_project_scene(
+        self,
+        project_id: str,
+        scene_id: str,
+        request: H3ProjectRenderRequest,
+    ) -> H3Project:
+        try:
+            project = self._project_store.get_project(project_id)
+            scene = next((item for item in project.scenes if item.id == scene_id), None)
+            if scene is None:
+                raise ProjectStoreError("The selected scene could not be found.")
+            if not scene.prompt.strip() or not scene.reference_image:
+                raise ProjectStoreError("The scene requires a prompt and reference image before rendering.")
+            scene_root = Path(project.project_root) / "scenes" / f"scene_{scene.order:03d}"
+            paths = resolve_h3_runtime_paths(scene_root / "renders")
+            provider = self._provider_factory(paths)
+            self._project_store.set_scene_status(project_id, scene_id, "queued", error=None)
+
+            def report(status: str, prompt_id: str | None) -> None:
+                self._project_store.set_scene_status(
+                    project_id, scene_id, status, prompt_id=prompt_id, error=None
+                )
+
+            result = provider.render(
+                base_url=request.base_url,
+                request=SingleSceneRequest(
+                    prompt=scene.prompt,
+                    input_image=Path(scene.reference_image),
+                    seed=scene.seed,
+                    width=scene.width,
+                    height=scene.height,
+                    duration_seconds=scene.duration_seconds,
+                    fps=scene.fps,
+                    output_filename_prefix=f"scene_{scene.order:03d}",
+                ),
+                status_callback=report,
+            )
+            metadata_payload = json.loads(result.metadata_file.read_text(encoding="utf-8"))
+            version_number = int(result.render_directory.name.removeprefix("v"))
+            version = H3RenderVersion(
+                id=result.render_directory.name,
+                number=version_number,
+                created_at=str(metadata_payload["created_at"]),
+                root=str(result.render_directory),
+                video_file=str(result.output_file),
+                metadata_file=str(result.metadata_file),
+                prompt=scene.prompt,
+                input_image_reference=scene.reference_image,
+                seed=scene.seed,
+                width=scene.width,
+                height=scene.height,
+                fps=scene.fps,
+                duration_seconds=scene.duration_seconds,
+                frame_count=result.video.frame_count,
+                prompt_id=result.prompt_id,
+                input_image_sha256=str(metadata_payload["input_image_sha256"]),
+                workflow_sha256=str(metadata_payload["workflow_sha256"]),
+                output_sha256=str(metadata_payload["output_sha256"]),
+                ffprobe=MiniMaxH3VideoProbeResponse(**result.video.__dict__),
+            )
+            return self._project_store.add_render_version(project_id, scene_id, version)
+        except (ProviderError, ProjectStoreError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            safe_error = str(exc) if isinstance(exc, (ProviderError, ProjectStoreError)) else "The verified render metadata could not be persisted."
+            try:
+                self._project_store.set_scene_status(
+                    project_id, scene_id, "failed", error=safe_error
+                )
+            except ProjectStoreError:
+                pass
+            raise HTTPError(422, safe_error, code="MINIMAX_H3_RENDER_FAILED") from exc
+
+    @staticmethod
+    def _project_call(operation: Callable[[], T]) -> T:
+        try:
+            return operation()
+        except ProjectStoreError as exc:
+            raise HTTPError(422, str(exc), code="H3_PROJECT_ERROR") from exc

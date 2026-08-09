@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -263,6 +264,7 @@ def create_immutable_render_version(
             "created_at": datetime.now(UTC).isoformat(),
             "prompt_id": prompt_id,
             "prompt": request.prompt,
+            "input_image_reference": str(request.input_image),
             "seed": request.seed,
             "width": request.width,
             "height": request.height,
@@ -273,7 +275,13 @@ def create_immutable_render_version(
             "output_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
             "ffprobe": asdict(video),
         }
-        metadata.write_text(json.dumps(metadata_payload, indent=2) + "\n", encoding="utf-8")
+        metadata_temporary = version_dir / f".metadata.{uuid.uuid4().hex}.tmp"
+        with metadata_temporary.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(metadata_payload, stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(metadata_temporary, metadata)
     except (OSError, ValueError) as exc:
         shutil.rmtree(version_dir, ignore_errors=True)
         raise ProviderError("The immutable render version could not be created.") from exc
@@ -309,7 +317,13 @@ class ComfyUIMiniMaxH3Provider:
         request: SingleSceneRequest,
         timeout_seconds: float = 1800.0,
         poll_interval_seconds: float = 2.0,
+        status_callback: Callable[[str, str | None], None] | None = None,
     ) -> RenderResult:
+        def report(status: str, prompt_id: str | None = None) -> None:
+            if status_callback is not None:
+                status_callback(status, prompt_id)
+
+        report("preparing")
         try:
             normalized_url = require_loopback_http_url(base_url)
             if urlsplit(normalized_url).scheme != "http":
@@ -343,9 +357,11 @@ class ComfyUIMiniMaxH3Provider:
         prompt_id = submission.get("prompt_id")
         if not isinstance(prompt_id, str) or not prompt_id:
             raise ProviderError("Local ComfyUI did not return a prompt ID.")
+        report("submitted", prompt_id)
 
         deadline = time.monotonic() + timeout_seconds
         source_output: Path | None = None
+        reported_rendering = False
         while time.monotonic() < deadline:
             try:
                 history_response = self._session.get(
@@ -360,10 +376,14 @@ class ComfyUIMiniMaxH3Provider:
                 raise ProviderError("Local ComfyUI history is unavailable.") from exc
             if source_output is not None:
                 break
+            if not reported_rendering:
+                report("rendering", prompt_id)
+                reported_rendering = True
             self._sleep(poll_interval_seconds)
         if source_output is None:
             raise ProviderError("The local ComfyUI render timed out.")
 
+        report("verifying", prompt_id)
         video = probe_video(self._ffprobe_path, source_output)
         version_dir, output, metadata = create_immutable_render_version(
             self._render_root, source_output, prompt_id, request, video

@@ -142,6 +142,8 @@ def test_creates_collision_safe_immutable_versions(tmp_path: Path) -> None:
     assert second[0].name == "v002"
     assert first[1].read_bytes() == b"render"
     assert json.loads(first[2].read_text(encoding="utf-8"))["prompt_id"] == "prompt-1"
+    assert json.loads(first[2].read_text(encoding="utf-8"))["input_image_reference"] == str(image)
+    assert list(first[0].glob(".metadata.*.tmp")) == []
 
 
 @pytest.mark.skipif(not FFPROBE_PATH.is_file(), reason="verified bundled ffprobe is unavailable")

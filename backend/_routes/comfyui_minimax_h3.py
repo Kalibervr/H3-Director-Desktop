@@ -4,7 +4,17 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from api_types import ComfyUIProbeResponse, MiniMaxH3RenderRequest, MiniMaxH3RenderResponse
+from api_types import (
+    ComfyUIProbeResponse,
+    H3Project,
+    H3ProjectCreateRequest,
+    H3ProjectOpenRequest,
+    H3ProjectRenderRequest,
+    H3ProjectUpdateRequest,
+    H3SceneUpdateRequest,
+    MiniMaxH3RenderRequest,
+    MiniMaxH3RenderResponse,
+)
 from app_handler import AppHandler
 from state import get_state_service
 
@@ -25,3 +35,61 @@ def route_minimax_h3_render(
     handler: AppHandler = Depends(get_state_service),
 ) -> MiniMaxH3RenderResponse:
     return handler.comfyui_minimax_h3.render_scene(request)
+
+
+@router.get("/projects", response_model=list[H3Project])
+def route_h3_projects(handler: AppHandler = Depends(get_state_service)) -> list[H3Project]:
+    return handler.comfyui_minimax_h3.list_projects()
+
+
+@router.post("/projects", response_model=H3Project)
+def route_h3_project_create(
+    request: H3ProjectCreateRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3Project:
+    return handler.comfyui_minimax_h3.create_project(request)
+
+
+@router.post("/projects/open", response_model=H3Project)
+def route_h3_project_open(
+    request: H3ProjectOpenRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3Project:
+    return handler.comfyui_minimax_h3.reopen_project(request.project_root)
+
+
+@router.get("/projects/{project_id}", response_model=H3Project)
+def route_h3_project_get(
+    project_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3Project:
+    return handler.comfyui_minimax_h3.get_project(project_id)
+
+
+@router.patch("/projects/{project_id}", response_model=H3Project)
+def route_h3_project_update(
+    project_id: str,
+    request: H3ProjectUpdateRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3Project:
+    return handler.comfyui_minimax_h3.update_project(project_id, request)
+
+
+@router.patch("/projects/{project_id}/scenes/{scene_id}", response_model=H3Project)
+def route_h3_scene_update(
+    project_id: str,
+    scene_id: str,
+    request: H3SceneUpdateRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3Project:
+    return handler.comfyui_minimax_h3.update_scene(project_id, scene_id, request)
+
+
+@router.post("/projects/{project_id}/scenes/{scene_id}/render", response_model=H3Project)
+def route_h3_scene_render(
+    project_id: str,
+    scene_id: str,
+    request: H3ProjectRenderRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3Project:
+    return handler.comfyui_minimax_h3.render_project_scene(project_id, scene_id, request)

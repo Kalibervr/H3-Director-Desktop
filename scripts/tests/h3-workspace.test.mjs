@@ -25,11 +25,23 @@ test('workspace exposes the required first-slice controls without raw graph UI',
   assert.doesNotMatch(home, /workflow JSON|class_type|node graph|LTX API|FAL AI|API key/)
 })
 
-test('renderer calls only the local sanitized MiniMax H3 backend boundary', () => {
-  const client = read('frontend/lib/h3-generation.ts')
+test('renderer calls only local sanitized project and MiniMax H3 backend boundaries', () => {
+  const client = read('frontend/lib/h3-generation.ts') + read('frontend/lib/h3-projects.ts')
   assert.match(client, /\/api\/comfyui\/minimax-h3\/status/)
-  assert.match(client, /\/api\/comfyui\/minimax-h3\/render/)
+  assert.match(client, /\/api\/comfyui\/minimax-h3\/projects/)
+  assert.match(client, /\/scenes\/\$\{encodeURIComponent\(sceneId\)\}\/render/)
   assert.match(client, /http:\/\/127\.0\.0\.1:8188/)
   assert.doesNotMatch(client, /https:\/\//)
   assert.doesNotMatch(client, /class_type|object_info|workflow JSON|node graph|api[_-]?key/i)
+})
+
+test('workspace exposes disk persistence, immutable versions and truthful phase status', () => {
+  const home = read('frontend/views/Home.tsx')
+  const projectClient = read('frontend/lib/h3-projects.ts')
+  for (const label of ['Render version', 'Retry Render', 'Phase status only', 'Preparing input', 'Verifying with ffprobe']) {
+    assert.match(home, new RegExp(label))
+  }
+  assert.match(projectClient, /selected_render_version_id/)
+  assert.match(projectClient, /render_versions/)
+  assert.doesNotMatch(home, /\d+% complete|progress:\s*\d+/i)
 })
