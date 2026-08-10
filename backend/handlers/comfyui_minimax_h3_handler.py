@@ -18,6 +18,7 @@ from api_types import (
     H3ProjectRenderRequest,
     H3ProjectUpdateRequest,
     H3RenderVersion,
+    H3SceneReorderRequest,
     H3SceneUpdateRequest,
     MiniMaxH3RenderRequest,
     MiniMaxH3RenderResponse,
@@ -100,7 +101,7 @@ class ComfyUIMiniMaxH3Handler:
         return self._project_call(self._project_store.list_projects)
 
     def create_project(self, request: H3ProjectCreateRequest) -> H3Project:
-        return self._project_call(lambda: self._project_store.create_project(request.name))
+        return self._project_call(lambda: self._project_store.create_project(request.name, request.scene_count))
 
     def get_project(self, project_id: str) -> H3Project:
         return self._project_call(lambda: self._project_store.get_project(project_id))
@@ -113,6 +114,21 @@ class ComfyUIMiniMaxH3Handler:
 
     def update_scene(self, project_id: str, scene_id: str, request: H3SceneUpdateRequest) -> H3Project:
         return self._project_call(lambda: self._project_store.update_scene(project_id, scene_id, request))
+
+    def select_scene(self, project_id: str, scene_id: str) -> H3Project:
+        return self._project_call(lambda: self._project_store.select_scene(project_id, scene_id))
+
+    def add_scene(self, project_id: str) -> H3Project:
+        return self._project_call(lambda: self._project_store.add_scene(project_id))
+
+    def duplicate_scene(self, project_id: str, scene_id: str) -> H3Project:
+        return self._project_call(lambda: self._project_store.duplicate_scene(project_id, scene_id))
+
+    def delete_scene(self, project_id: str, scene_id: str) -> H3Project:
+        return self._project_call(lambda: self._project_store.delete_scene(project_id, scene_id))
+
+    def reorder_scenes(self, project_id: str, request: H3SceneReorderRequest) -> H3Project:
+        return self._project_call(lambda: self._project_store.reorder_scenes(project_id, request.scene_ids))
 
     def get_status(self, base_url: str) -> ComfyUIProbeResponse:
         try:
@@ -179,7 +195,7 @@ class ComfyUIMiniMaxH3Handler:
                 raise ProjectStoreError("The selected scene could not be found.")
             if not scene.prompt.strip() or not scene.reference_image:
                 raise ProjectStoreError("The scene requires a prompt and reference image before rendering.")
-            scene_root = Path(project.project_root) / "scenes" / f"scene_{scene.order:03d}"
+            scene_root = Path(project.project_root) / "scenes" / scene.storage_name
             paths = resolve_h3_runtime_paths(scene_root / "renders")
             provider = self._provider_factory(paths)
             self._project_store.set_scene_status(project_id, scene_id, "queued", error=None)

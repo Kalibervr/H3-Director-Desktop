@@ -12,6 +12,7 @@ from api_types import (
     H3ProjectRenderRequest,
     H3ProjectUpdateRequest,
     H3SceneUpdateRequest,
+    H3SceneReorderRequest,
     MiniMaxH3RenderRequest,
     MiniMaxH3RenderResponse,
 )
@@ -83,6 +84,50 @@ def route_h3_scene_update(
     handler: AppHandler = Depends(get_state_service),
 ) -> H3Project:
     return handler.comfyui_minimax_h3.update_scene(project_id, scene_id, request)
+
+
+@router.post("/projects/{project_id}/scenes", response_model=H3Project)
+def route_h3_scene_add(
+    project_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3Project:
+    return handler.comfyui_minimax_h3.add_scene(project_id)
+
+
+@router.post("/projects/{project_id}/scenes/reorder", response_model=H3Project)
+def route_h3_scenes_reorder(
+    project_id: str,
+    request: H3SceneReorderRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3Project:
+    return handler.comfyui_minimax_h3.reorder_scenes(project_id, request)
+
+
+@router.post("/projects/{project_id}/scenes/{scene_id}/select", response_model=H3Project)
+def route_h3_scene_select(
+    project_id: str,
+    scene_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3Project:
+    return handler.comfyui_minimax_h3.select_scene(project_id, scene_id)
+
+
+@router.post("/projects/{project_id}/scenes/{scene_id}/duplicate", response_model=H3Project)
+def route_h3_scene_duplicate(
+    project_id: str,
+    scene_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3Project:
+    return handler.comfyui_minimax_h3.duplicate_scene(project_id, scene_id)
+
+
+@router.delete("/projects/{project_id}/scenes/{scene_id}", response_model=H3Project)
+def route_h3_scene_delete(
+    project_id: str,
+    scene_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3Project:
+    return handler.comfyui_minimax_h3.delete_scene(project_id, scene_id)
 
 
 @router.post("/projects/{project_id}/scenes/{scene_id}/render", response_model=H3Project)

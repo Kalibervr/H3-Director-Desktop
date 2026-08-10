@@ -187,6 +187,7 @@ class H3RenderVersion(BaseModel):
 class H3Scene(BaseModel):
     model_config = ConfigDict(strict=True)
     id: str
+    storage_name: str = Field(pattern=r"^scene_[0-9]{3}$")
     order: int = Field(ge=1)
     name: str = Field(min_length=1, max_length=120)
     prompt: str
@@ -206,7 +207,7 @@ class H3Scene(BaseModel):
 
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[1]
+    schema_version: Literal[2]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str
@@ -220,6 +221,7 @@ class H3Project(BaseModel):
 class H3ProjectCreateRequest(BaseModel):
     model_config = ConfigDict(strict=True)
     name: str = Field(min_length=1, max_length=120)
+    scene_count: int = Field(default=1, ge=1, le=999)
 
 
 class H3ProjectUpdateRequest(BaseModel):
@@ -249,6 +251,11 @@ class H3SceneUpdateRequest(BaseModel):
 class H3ProjectRenderRequest(BaseModel):
     model_config = ConfigDict(strict=True)
     base_url: str = "http://127.0.0.1:8188"
+
+
+class H3SceneReorderRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+    scene_ids: list[str] = Field(min_length=1, max_length=999)
 
 
 class GenerationProgressResponse(BaseModel):

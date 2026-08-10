@@ -45,3 +45,14 @@ test('workspace exposes disk persistence, immutable versions and truthful phase 
   assert.match(projectClient, /render_versions/)
   assert.doesNotMatch(home, /\d+% complete|progress:\s*\d+/i)
 })
+
+test('workspace exposes persistent multi-scene creation and storyboard operations', () => {
+  const home = read('frontend/views/Home.tsx')
+  const storyboard = read('frontend/components/SceneStoryboard.tsx')
+  const projectClient = read('frontend/lib/h3-projects.ts')
+  for (const label of ['Scene count', 'Custom positive scene count', 'Scene name']) assert.match(home, new RegExp(label))
+  for (const label of ['Add Scene', 'Duplicate', 'Delete', 'Move']) assert.match(storyboard, new RegExp(label, 'i'))
+  for (const operation of ['selectH3Scene', 'addH3Scene', 'duplicateH3Scene', 'deleteH3Scene', 'reorderH3Scenes']) assert.match(projectClient, new RegExp(operation))
+  assert.match(storyboard, /overflow-x-auto/)
+  assert.doesNotMatch(home + storyboard, /Render All|Render From Here|Continue Previous|Same Character New Shot/)
+})

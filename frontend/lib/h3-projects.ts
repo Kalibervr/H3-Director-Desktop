@@ -36,6 +36,7 @@ export interface H3RenderVersion {
 
 export interface H3Scene {
   id: string
+  storage_name: string
   order: number
   name: string
   prompt: string
@@ -54,7 +55,7 @@ export interface H3Scene {
 }
 
 export interface H3Project {
-  schema_version: 1
+  schema_version: 2
   id: string
   name: string
   created_at: string
@@ -84,9 +85,31 @@ export async function listH3Projects(): Promise<H3Project[]> {
   return readJson(await backendFetch('/api/comfyui/minimax-h3/projects'))
 }
 
-export async function createH3Project(name: string): Promise<H3Project> {
+export async function createH3Project(name: string, sceneCount: number): Promise<H3Project> {
   return readJson(await backendFetch('/api/comfyui/minimax-h3/projects', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, scene_count: sceneCount }),
+  }))
+}
+
+export async function selectH3Scene(projectId: string, sceneId: string): Promise<H3Project> {
+  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/select`, { method: 'POST' }))
+}
+
+export async function addH3Scene(projectId: string): Promise<H3Project> {
+  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes`, { method: 'POST' }))
+}
+
+export async function duplicateH3Scene(projectId: string, sceneId: string): Promise<H3Project> {
+  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/duplicate`, { method: 'POST' }))
+}
+
+export async function deleteH3Scene(projectId: string, sceneId: string): Promise<H3Project> {
+  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}`, { method: 'DELETE' }))
+}
+
+export async function reorderH3Scenes(projectId: string, sceneIds: string[]): Promise<H3Project> {
+  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/reorder`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scene_ids: sceneIds }),
   }))
 }
 

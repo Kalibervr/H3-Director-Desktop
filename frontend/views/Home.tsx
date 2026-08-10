@@ -1,16 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Aperture, Clapperboard, Film, Folder, ImagePlus,
-  Loader2, Plus, Radio, RotateCcw, Sparkles,
+  Loader2, Plus, RotateCcw, Sparkles,
 } from 'lucide-react'
+import { SceneStoryboard } from '../components/SceneStoryboard'
 import { pathToFileUrl } from '../lib/file-url'
 import { getH3RuntimeStatus, type ComfyUIStatus } from '../lib/h3-generation'
 import {
   createH3Project,
+  addH3Scene,
+  deleteH3Scene,
+  duplicateH3Scene,
   getH3Project,
   listH3Projects,
   renameH3Project,
   renderH3ProjectScene,
+  reorderH3Scenes,
+  selectH3Scene,
   updateH3Scene,
   type H3Project,
   type H3Scene,
@@ -44,6 +50,8 @@ export function Home() {
   const [projects, setProjects] = useState<H3Project[]>([])
   const [project, setProject] = useState<H3Project | null>(null)
   const [newProjectName, setNewProjectName] = useState('')
+  const [newProjectSceneCount, setNewProjectSceneCount] = useState(5)
+  const [customSceneCount, setCustomSceneCount] = useState('')
   const [showNewProject, setShowNewProject] = useState(false)
   const [runtimeStatus, setRuntimeStatus] = useState<ComfyUIStatus>('unavailable')
   const [runtimeVersion, setRuntimeVersion] = useState<string | null>(null)
@@ -52,6 +60,7 @@ export function Home() {
   const [rendering, setRendering] = useState(false)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const saveTimer = useRef<number | null>(null)
+  const pendingSave = useRef<{ projectId: string; sceneId: string; changes: Partial<H3Scene> } | null>(null)
   const scene = selectedScene(project)
 
   const replaceProject = (next: H3Project) => {
@@ -105,13 +114,43 @@ export function Home() {
     if (!project || !scene) return
     setProject({ ...project, scenes: project.scenes.map(item => item.id === scene.id ? { ...item, ...changes } : item) })
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
+    const pending = pendingSave.current
+    pendingSave.current = {
+      projectId: project.id,
+      sceneId: scene.id,
+      changes: pending?.projectId === project.id && pending.sceneId === scene.id ? { ...pending.changes, ...changes } : changes,
+    }
     setSaveState('saving')
     saveTimer.current = window.setTimeout(() => {
-      void updateH3Scene(project.id, scene.id, changes).then(next => {
+      const save = pendingSave.current
+      pendingSave.current = null
+      if (!save) return
+      void updateH3Scene(save.projectId, save.sceneId, save.changes).then(next => {
         replaceProject(next)
         setSaveState('saved')
       }).catch(() => setSaveState('error'))
     }, 500)
+  }
+
+  const flushPendingSave = async () => {
+    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
+    saveTimer.current = null
+    const save = pendingSave.current
+    pendingSave.current = null
+    if (!save) return
+    replaceProject(await updateH3Scene(save.projectId, save.sceneId, save.changes))
+    setSaveState('saved')
+  }
+
+  const runSceneOperation = async (operation: () => Promise<H3Project>) => {
+    try {
+      await flushPendingSave()
+      replaceProject(await operation())
+      setWorkspaceError(null)
+    } catch (error) {
+      setSaveState('error')
+      setWorkspaceError(error instanceof Error ? error.message : 'The scene change could not be saved.')
+    }
   }
 
   const chooseReferenceImage = async () => {
@@ -136,9 +175,12 @@ export function Home() {
   const createProject = async () => {
     if (!newProjectName.trim()) return
     try {
-      const next = await createH3Project(newProjectName.trim())
+      const count = customSceneCount ? Number(customSceneCount) : newProjectSceneCount
+      if (!Number.isInteger(count) || count < 1 || count > 999) throw new Error('Scene count must be a positive whole number up to 999.')
+      const next = await createH3Project(newProjectName.trim(), count)
       replaceProject(next)
       setNewProjectName('')
+      setCustomSceneCount('')
       setShowNewProject(false)
       setWorkspaceError(null)
     } catch (error) {
@@ -146,12 +188,22 @@ export function Home() {
     }
   }
 
+  const moveScene = (target: H3Scene, direction: -1 | 1) => {
+    if (!project) return
+    const ids = project.scenes.map(item => item.id)
+    const index = ids.indexOf(target.id)
+    const destination = index + direction
+    if (index < 0 || destination < 0 || destination >= ids.length) return
+    ;[ids[index], ids[destination]] = [ids[destination], ids[index]]
+    void runSceneOperation(() => reorderH3Scenes(project.id, ids))
+  }
+
   const renderScene = async () => {
     if (!project || !scene || !scene.prompt.trim() || !scene.reference_image || runtimeStatus !== 'connected') return
-    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
     setRendering(true)
     setWorkspaceError(null)
     try {
+      await flushPendingSave()
       const saved = await updateH3Scene(project.id, scene.id, {
         prompt: scene.prompt, reference_image: scene.reference_image, seed: scene.seed,
         width: scene.width, height: scene.height, fps: scene.fps,
@@ -209,7 +261,8 @@ export function Home() {
 
       <aside className="row-span-2 min-h-0 overflow-y-auto border-l border-white/10 bg-[#0b0e13] p-5">
         <div className="flex items-center justify-between"><div className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-amber-300" /> Director controls</div>{scene && <span className="text-[10px] uppercase tracking-wider text-zinc-600">{STATUS_LABELS[scene.status]}</span>}</div>
-        <label className="mt-6 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene prompt<textarea value={scene?.prompt ?? ''} disabled={!scene} onChange={event => updateSceneLocally({ prompt: event.target.value })} className="mt-2 h-36 w-full resize-none rounded-xl border border-white/10 bg-black/30 p-3 text-sm normal-case leading-6 tracking-normal outline-none focus:border-amber-300/40" placeholder="Describe the shot, movement, lighting, mood and audio…" /></label>
+        <label className="mt-6 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene name<input value={scene?.name ?? ''} disabled={!scene} onChange={event => updateSceneLocally({ name: event.target.value })} className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm normal-case tracking-normal outline-none focus:border-amber-300/40" /></label>
+        <label className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene prompt<textarea value={scene?.prompt ?? ''} disabled={!scene} onChange={event => updateSceneLocally({ prompt: event.target.value })} className="mt-2 h-32 w-full resize-none rounded-xl border border-white/10 bg-black/30 p-3 text-sm normal-case leading-6 tracking-normal outline-none focus:border-amber-300/40" placeholder="Describe the shot, movement, lighting, mood and audio…" /></label>
         <label className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Reference image<button onClick={() => void chooseReferenceImage()} disabled={!scene} className="mt-2 flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[0.025] px-3 py-3 text-sm normal-case tracking-normal text-zinc-400"><span className="truncate">{scene?.reference_image?.split(/[\\/]/).pop() ?? 'Choose image'}</span><ImagePlus className="h-4 w-4" /></button></label>
         <div className="mt-6 grid grid-cols-2 gap-3">{scene && [
           ['Width', scene.width], ['Height', scene.height], ['FPS', scene.fps], ['Duration', `${scene.duration_seconds}s`], ['Frames', scene.frame_count],
@@ -223,8 +276,8 @@ export function Home() {
         <p className="mt-3 text-center text-[10px] text-zinc-700">Phase status only · no invented percentage</p>
       </aside>
 
-      <section className="min-w-0 border-t border-white/10 bg-[#090c11] px-6 py-4"><div className="mb-3 flex items-center justify-between"><div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Storyboard</div><div className="flex items-center gap-2 text-[10px] text-zinc-600"><Radio className="h-3 w-3" /> Single-scene mode</div></div><div className="flex h-[92px] gap-3"><div className="flex w-64 items-center gap-3 rounded-xl border border-amber-300/30 bg-amber-300/[0.05] p-3"><div className="flex h-14 w-20 items-center justify-center overflow-hidden rounded-lg bg-black">{previewUrl ? <img src={previewUrl} alt="Scene 01" className="h-full w-full object-cover" /> : <Film className="h-5 w-5 text-zinc-700" />}</div><div className="min-w-0"><div className="truncate text-xs font-semibold">{scene?.name ?? 'Scene 01'}</div><div className="mt-1 text-[10px] text-zinc-600">{scene ? `${scene.duration_seconds}s · ${scene.frame_count}f · ${STATUS_LABELS[scene.status]}` : 'No project'}</div></div></div><div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/5 text-xs text-zinc-700">Additional scenes remain outside this milestone</div></div></section>
+      <SceneStoryboard project={project} statusLabels={STATUS_LABELS} onSelect={target => project && target.id !== project.selected_scene_id && void runSceneOperation(() => selectH3Scene(project.id, target.id))} onAdd={() => project && void runSceneOperation(() => addH3Scene(project.id))} onDuplicate={target => project && void runSceneOperation(() => duplicateH3Scene(project.id, target.id))} onDelete={target => project && void runSceneOperation(() => deleteH3Scene(project.id, target.id))} onMove={moveScene} />
     </div>
-    {showNewProject && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"><div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#10141b] p-6"><h2 className="text-lg font-semibold">New Project</h2><p className="mt-1 text-sm text-zinc-500">Creates an app-owned project folder and one persisted scene.</p><input autoFocus value={newProjectName} onChange={event => setNewProjectName(event.target.value)} onKeyDown={event => event.key === 'Enter' && void createProject()} placeholder="Project name" className="mt-5 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm outline-none" /><div className="mt-5 flex justify-end gap-3"><button onClick={() => setShowNewProject(false)} className="px-4 py-2 text-sm text-zinc-500">Cancel</button><button onClick={() => void createProject()} disabled={!newProjectName.trim()} className="rounded-lg bg-amber-300 px-4 py-2 text-sm font-semibold text-zinc-950 disabled:opacity-30">Create Project</button></div></div></div>}
+    {showNewProject && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"><div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#10141b] p-6"><h2 className="text-lg font-semibold">New Project</h2><p className="mt-1 text-sm text-zinc-500">Creates an app-owned project folder and persisted scene cards.</p><input autoFocus value={newProjectName} onChange={event => setNewProjectName(event.target.value)} placeholder="Project name" className="mt-5 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm outline-none" /><div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene count</div><div className="mt-2 grid grid-cols-4 gap-2">{[5, 10, 15].map(count => <button key={count} onClick={() => { setNewProjectSceneCount(count); setCustomSceneCount('') }} className={`rounded-lg border px-3 py-2 text-sm ${!customSceneCount && newProjectSceneCount === count ? 'border-amber-300/50 bg-amber-300/10 text-amber-200' : 'border-white/10 text-zinc-500'}`}>{count}</button>)}<input type="number" min="1" max="999" value={customSceneCount} onChange={event => setCustomSceneCount(event.target.value)} placeholder="Custom" aria-label="Custom positive scene count" className="rounded-lg border border-white/10 bg-black/30 px-2 text-center text-sm outline-none" /></div><div className="mt-5 flex justify-end gap-3"><button onClick={() => setShowNewProject(false)} className="px-4 py-2 text-sm text-zinc-500">Cancel</button><button onClick={() => void createProject()} disabled={!newProjectName.trim()} className="rounded-lg bg-amber-300 px-4 py-2 text-sm font-semibold text-zinc-950 disabled:opacity-30">Create Project</button></div></div></div>}
   </div>
 }
