@@ -13,6 +13,7 @@ import {
   duplicateH3Scene,
   getH3Project,
   listH3Projects,
+  prepareH3Continuity,
   renameH3Project,
   renderH3ProjectScene,
   reorderH3Scenes,
@@ -58,6 +59,7 @@ export function Home() {
   const [runtimeError, setRuntimeError] = useState<string | null>(null)
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved')
   const [rendering, setRendering] = useState(false)
+  const [preparingContinuity, setPreparingContinuity] = useState(false)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const saveTimer = useRef<number | null>(null)
   const pendingSave = useRef<{ projectId: string; sceneId: string; changes: Partial<H3Scene> } | null>(null)
@@ -199,7 +201,7 @@ export function Home() {
   }
 
   const renderScene = async () => {
-    if (!project || !scene || !scene.prompt.trim() || !scene.reference_image || runtimeStatus !== 'connected') return
+    if (!project || !scene || !scene.prompt.trim() || runtimeStatus !== 'connected') return
     setRendering(true)
     setWorkspaceError(null)
     try {
@@ -220,13 +222,40 @@ export function Home() {
     }
   }
 
+  const prepareContinuity = async () => {
+    if (!project || !scene || scene.mode !== 'continue_previous') return
+    setPreparingContinuity(true)
+    setWorkspaceError(null)
+    try {
+      await flushPendingSave()
+      const response = await prepareH3Continuity(project.id, scene.id)
+      replaceProject(response.project)
+      setSaveState('saved')
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : 'The continuity frame could not be extracted.')
+      try { replaceProject(await getH3Project(project.id)) } catch { /* retain recoverable local state */ }
+    } finally {
+      setPreparingContinuity(false)
+    }
+  }
+
   const activeVersion = useMemo(() => scene?.render_versions.find(
     version => version.id === scene.selected_render_version_id,
   ) ?? null, [scene])
   const previewUrl = activeVersion
     ? pathToFileUrl(activeVersion.video_file)
     : scene?.reference_image ? pathToFileUrl(scene.reference_image) : null
-  const canRender = Boolean(project && scene?.prompt.trim() && scene.reference_image && runtimeStatus === 'connected' && !rendering)
+  const sourceScene = scene && project ? [...project.scenes].sort((a, b) => a.order - b.order)[scene.order - 2] ?? null : null
+  const sourceVersion = sourceScene?.render_versions.find(item => item.id === sourceScene.selected_render_version_id) ?? null
+  const selectedContinuityArtifact = scene?.continuity_artifacts.find(item => item.id === scene.selected_continuity_artifact_id) ?? null
+  const continuityArtifact = selectedContinuityArtifact
+    && selectedContinuityArtifact.source_scene_id === sourceScene?.id
+    && selectedContinuityArtifact.source_render_version_id === sourceVersion?.id
+    && selectedContinuityArtifact.strategy === scene?.continuity_strategy
+    && selectedContinuityArtifact.offset_from_end_frames === (scene?.continuity_strategy === 'offset_from_end' ? scene.continuity_offset_frames : 0)
+    ? selectedContinuityArtifact : null
+  const modeHasInput = scene?.mode === 'continue_previous' ? Boolean(sourceVersion) : scene?.mode === 'new_shot' ? Boolean(scene.reference_image) : false
+  const canRender = Boolean(project && scene?.prompt.trim() && modeHasInput && runtimeStatus === 'connected' && !rendering && !preparingContinuity)
   const phaseActive = scene ? ACTIVE_STATUSES.includes(scene.status) : false
 
   return <div className="h-screen overflow-hidden bg-[#07090d] text-zinc-100">
@@ -263,6 +292,9 @@ export function Home() {
         <div className="flex items-center justify-between"><div className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-amber-300" /> Director controls</div>{scene && <span className="text-[10px] uppercase tracking-wider text-zinc-600">{STATUS_LABELS[scene.status]}</span>}</div>
         <label className="mt-6 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene name<input value={scene?.name ?? ''} disabled={!scene} onChange={event => updateSceneLocally({ name: event.target.value })} className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm normal-case tracking-normal outline-none focus:border-amber-300/40" /></label>
         <label className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene prompt<textarea value={scene?.prompt ?? ''} disabled={!scene} onChange={event => updateSceneLocally({ prompt: event.target.value })} className="mt-2 h-32 w-full resize-none rounded-xl border border-white/10 bg-black/30 p-3 text-sm normal-case leading-6 tracking-normal outline-none focus:border-amber-300/40" placeholder="Describe the shot, movement, lighting, mood and audio…" /></label>
+        <label className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene Mode<select value={scene?.mode ?? 'new_shot'} disabled={!scene} onChange={event => updateSceneLocally({ mode: event.target.value as H3Scene['mode'] })} className="mt-2 w-full rounded-xl border border-white/10 bg-[#11151c] px-3 py-3 text-sm normal-case tracking-normal text-zinc-300"><option value="new_shot">New Shot</option><option value="continue_previous">Continue Previous</option><option value="same_character_new_shot">Same Character, New Shot — unavailable</option></select></label>
+        {scene?.mode === 'same_character_new_shot' && <p className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200/70">Unavailable: the verified MiniMax H3 workflow has one image input and no separate character-reference control.</p>}
+        {scene?.mode === 'continue_previous' && <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Continuity source</div><div className="mt-2 text-xs text-zinc-300">{sourceScene ? `${sourceScene.name} · ${sourceVersion?.id ?? 'no selected completed version'}` : 'Blocked · no previous scene'}</div><label className="mt-3 block text-[10px] uppercase tracking-wider text-zinc-600">Extraction strategy<select value={scene.continuity_strategy} onChange={event => updateSceneLocally({ continuity_strategy: event.target.value as H3Scene['continuity_strategy'] })} className="mt-1 w-full rounded-lg border border-white/10 bg-[#11151c] px-2 py-2 text-xs normal-case tracking-normal text-zinc-300"><option value="last_valid_frame">Last valid frame</option><option value="offset_from_end">Offset from end</option></select></label>{scene.continuity_strategy === 'offset_from_end' && <label className="mt-3 block text-[10px] uppercase tracking-wider text-zinc-600">Offset from end · frames<input type="number" min="0" value={scene.continuity_offset_frames} onChange={event => updateSceneLocally({ continuity_offset_frames: Math.max(0, Number(event.target.value)) })} className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-2 py-2 font-mono text-xs text-zinc-300" /></label>}{continuityArtifact && <div className="mt-3 flex gap-3"><img src={pathToFileUrl(continuityArtifact.image_file)} alt="Extracted continuity frame" className="h-16 w-24 rounded-lg bg-black object-cover" /><div className="text-[10px] leading-5 text-zinc-500">{continuityArtifact.id}<br />Frame {continuityArtifact.frame_index} · {continuityArtifact.timestamp_seconds.toFixed(3)}s<br />Source {continuityArtifact.source_render_version_id}</div></div>}<button onClick={() => void prepareContinuity()} disabled={!sourceVersion || preparingContinuity} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-amber-300/20 px-3 py-2 text-xs text-amber-200 disabled:opacity-30">{preparingContinuity && <Loader2 className="h-3 w-3 animate-spin" />} Extract Continuity Frame</button>{!sourceVersion && <p className="mt-2 text-[10px] text-red-300">Rendering is blocked until the previous scene has a selected completed render.</p>}</div>}
         <label className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Reference image<button onClick={() => void chooseReferenceImage()} disabled={!scene} className="mt-2 flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[0.025] px-3 py-3 text-sm normal-case tracking-normal text-zinc-400"><span className="truncate">{scene?.reference_image?.split(/[\\/]/).pop() ?? 'Choose image'}</span><ImagePlus className="h-4 w-4" /></button></label>
         <div className="mt-6 grid grid-cols-2 gap-3">{scene && [
           ['Width', scene.width], ['Height', scene.height], ['FPS', scene.fps], ['Duration', `${scene.duration_seconds}s`], ['Frames', scene.frame_count],

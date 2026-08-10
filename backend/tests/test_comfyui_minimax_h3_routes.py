@@ -73,7 +73,10 @@ def test_handler_maps_verified_ui_fields_to_existing_provider(monkeypatch, tmp_p
         video=VideoProbe("h264", 640, 640, "24/1", 5.167, 124, True),
     )
     provider = FakeProvider(result)
-    paths = H3RuntimePaths(tmp_path / "workflow.json", tmp_path / "comfy-output", tmp_path / "renders", tmp_path / "ffprobe.exe")
+    paths = H3RuntimePaths(
+        tmp_path / "workflow.json", tmp_path / "comfy-output", tmp_path / "renders",
+        tmp_path / "ffprobe.exe", tmp_path / "ffmpeg.exe",
+    )
     monkeypatch.setattr("handlers.comfyui_minimax_h3_handler.resolve_h3_runtime_paths", lambda: paths)
     handler = ComfyUIMiniMaxH3Handler(provider_factory=lambda received: provider)  # type: ignore[arg-type]
 

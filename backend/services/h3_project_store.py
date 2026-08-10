@@ -12,6 +12,7 @@ from pathlib import Path
 from api_types import (
     H3Project,
     H3ProjectSettings,
+    H3ContinuityArtifact,
     H3RenderVersion,
     H3Scene,
     H3SceneUpdateRequest,
@@ -97,7 +98,7 @@ class H3ProjectStore:
         timestamp = _now()
         scenes = [self._new_scene(number, _scene_storage_name(number)) for number in range(1, scene_count + 1)]
         project = H3Project(
-            schema_version=2,
+            schema_version=3,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
@@ -273,6 +274,30 @@ class H3ProjectStore:
             raise ProjectStoreError("The selected scene could not be found.")
         return self.save_project(project.model_copy(update={"scenes": scenes, "selected_scene_id": scene_id}))
 
+    def add_continuity_artifact(
+        self,
+        project_id: str,
+        scene_id: str,
+        artifact: H3ContinuityArtifact,
+    ) -> H3Project:
+        project = self.get_project(project_id)
+        scenes: list[H3Scene] = []
+        found = False
+        for scene in project.scenes:
+            if scene.id != scene_id:
+                scenes.append(scene)
+                continue
+            found = True
+            if any(item.id == artifact.id for item in scene.continuity_artifacts):
+                raise ProjectStoreError("The immutable continuity artifact already exists.")
+            scenes.append(scene.model_copy(update={
+                "continuity_artifacts": [*scene.continuity_artifacts, artifact],
+                "selected_continuity_artifact_id": artifact.id,
+            }))
+        if not found:
+            raise ProjectStoreError("The selected scene could not be found.")
+        return self.save_project(project.model_copy(update={"scenes": scenes, "selected_scene_id": scene_id}))
+
     @staticmethod
     def _new_scene(order: int, storage_name: str, source: H3Scene | None = None) -> H3Scene:
         return H3Scene(
@@ -288,6 +313,11 @@ class H3ProjectStore:
             duration_seconds=source.duration_seconds if source else 5.0,
             frame_count=source.frame_count if source else 124,
             seed=source.seed if source else 193554738272393,
+            mode=source.mode if source else "new_shot",
+            continuity_strategy=source.continuity_strategy if source else "last_valid_frame",
+            continuity_offset_frames=source.continuity_offset_frames if source else 0,
+            selected_continuity_artifact_id=None,
+            continuity_artifacts=[],
             status="idle",
             selected_render_version_id=None,
             render_versions=[],
@@ -332,11 +362,18 @@ class H3ProjectStore:
     def _read_file(path: Path) -> H3Project:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-            migrated = payload.get("schema_version") == 1
-            if migrated:
-                payload["schema_version"] = 2
+            migrated = payload.get("schema_version") in {1, 2}
+            if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
+            if migrated:
+                payload["schema_version"] = 3
+                for scene in payload.get("scenes", []):
+                    scene.setdefault("mode", "new_shot")
+                    scene.setdefault("continuity_strategy", "last_valid_frame")
+                    scene.setdefault("continuity_offset_frames", 0)
+                    scene.setdefault("selected_continuity_artifact_id", None)
+                    scene.setdefault("continuity_artifacts", [])
             project = H3Project.model_validate(payload)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             raise ProjectStoreError("The local project metadata is invalid or unreadable.") from exc

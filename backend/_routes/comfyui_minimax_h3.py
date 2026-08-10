@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from api_types import (
     ComfyUIProbeResponse,
     H3Project,
+    H3ContinuityPrepareResponse,
     H3ProjectCreateRequest,
     H3ProjectOpenRequest,
     H3ProjectRenderRequest,
@@ -138,3 +139,15 @@ def route_h3_scene_render(
     handler: AppHandler = Depends(get_state_service),
 ) -> H3Project:
     return handler.comfyui_minimax_h3.render_project_scene(project_id, scene_id, request)
+
+
+@router.post(
+    "/projects/{project_id}/scenes/{scene_id}/continuity",
+    response_model=H3ContinuityPrepareResponse,
+)
+def route_h3_scene_continuity(
+    project_id: str,
+    scene_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3ContinuityPrepareResponse:
+    return handler.comfyui_minimax_h3.prepare_continuity(project_id, scene_id)

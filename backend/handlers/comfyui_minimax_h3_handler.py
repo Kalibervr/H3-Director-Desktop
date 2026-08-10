@@ -14,10 +14,12 @@ from _routes._errors import HTTPError
 from api_types import (
     ComfyUIProbeResponse,
     H3Project,
+    H3ContinuityPrepareResponse,
     H3ProjectCreateRequest,
     H3ProjectRenderRequest,
     H3ProjectUpdateRequest,
     H3RenderVersion,
+    H3Scene,
     H3SceneReorderRequest,
     H3SceneUpdateRequest,
     MiniMaxH3RenderRequest,
@@ -32,6 +34,7 @@ from services.comfyui_minimax_h3_provider import (
 )
 from services.comfyui_runtime_probe import ComfyUIRuntimeProbe
 from services.h3_project_store import H3ProjectStore, ProjectStoreError
+from services.h3_continuity import ContinuityError, H3ContinuityExtractor, previous_scene, selected_completed_version
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,7 @@ class H3RuntimePaths:
     comfyui_output: Path
     render_root: Path
     ffprobe: Path
+    ffmpeg: Path
 
 
 def _environment_path(name: str) -> Path | None:
@@ -64,8 +68,10 @@ def resolve_h3_runtime_paths(render_root_override: Path | None = None) -> H3Runt
     )
     imageio_dir = Path(imageio_ffmpeg.__file__).resolve().parent
     ffprobe_name = "ffprobe.exe" if os.name == "nt" else "ffprobe"
+    ffmpeg_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
     ffprobe = _environment_path("H3_FFPROBE_PATH") or imageio_dir / "binaries" / ffprobe_name
-    return H3RuntimePaths(workflow, comfyui_output, render_root, ffprobe)
+    ffmpeg = _environment_path("H3_FFMPEG_PATH") or imageio_dir / "binaries" / ffmpeg_name
+    return H3RuntimePaths(workflow, comfyui_output, render_root, ffprobe, ffmpeg)
 
 
 ProviderFactory = Callable[[H3RuntimePaths], ComfyUIMiniMaxH3Provider]
@@ -130,6 +136,19 @@ class ComfyUIMiniMaxH3Handler:
     def reorder_scenes(self, project_id: str, request: H3SceneReorderRequest) -> H3Project:
         return self._project_call(lambda: self._project_store.reorder_scenes(project_id, request.scene_ids))
 
+    def prepare_continuity(self, project_id: str, scene_id: str) -> H3ContinuityPrepareResponse:
+        try:
+            project = self._project_store.get_project(project_id)
+            scene = next((item for item in project.scenes if item.id == scene_id), None)
+            if scene is None:
+                raise ProjectStoreError("The selected scene could not be found.")
+            paths = resolve_h3_runtime_paths()
+            artifact = H3ContinuityExtractor(paths.ffmpeg, paths.ffprobe).extract(project, scene)
+            project = self._project_store.add_continuity_artifact(project_id, scene_id, artifact)
+            return H3ContinuityPrepareResponse(project=project, artifact=artifact)
+        except (ProjectStoreError, ContinuityError) as exc:
+            raise HTTPError(422, str(exc), code="H3_CONTINUITY_ERROR") from exc
+
     def get_status(self, base_url: str) -> ComfyUIProbeResponse:
         try:
             workflow = load_verified_workflow(resolve_h3_runtime_paths().workflow)
@@ -193,8 +212,9 @@ class ComfyUIMiniMaxH3Handler:
             scene = next((item for item in project.scenes if item.id == scene_id), None)
             if scene is None:
                 raise ProjectStoreError("The selected scene could not be found.")
-            if not scene.prompt.strip() or not scene.reference_image:
-                raise ProjectStoreError("The scene requires a prompt and reference image before rendering.")
+            if not scene.prompt.strip():
+                raise ProjectStoreError("The scene requires a prompt before rendering.")
+            input_image = self._resolve_render_input(project, scene)
             scene_root = Path(project.project_root) / "scenes" / scene.storage_name
             paths = resolve_h3_runtime_paths(scene_root / "renders")
             provider = self._provider_factory(paths)
@@ -209,7 +229,7 @@ class ComfyUIMiniMaxH3Handler:
                 base_url=request.base_url,
                 request=SingleSceneRequest(
                     prompt=scene.prompt,
-                    input_image=Path(scene.reference_image),
+                    input_image=input_image,
                     seed=scene.seed,
                     width=scene.width,
                     height=scene.height,
@@ -229,7 +249,7 @@ class ComfyUIMiniMaxH3Handler:
                 video_file=str(result.output_file),
                 metadata_file=str(result.metadata_file),
                 prompt=scene.prompt,
-                input_image_reference=scene.reference_image,
+                input_image_reference=str(input_image),
                 seed=scene.seed,
                 width=scene.width,
                 height=scene.height,
@@ -243,8 +263,8 @@ class ComfyUIMiniMaxH3Handler:
                 ffprobe=MiniMaxH3VideoProbeResponse(**result.video.__dict__),
             )
             return self._project_store.add_render_version(project_id, scene_id, version)
-        except (ProviderError, ProjectStoreError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
-            safe_error = str(exc) if isinstance(exc, (ProviderError, ProjectStoreError)) else "The verified render metadata could not be persisted."
+        except (ProviderError, ProjectStoreError, ContinuityError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            safe_error = str(exc) if isinstance(exc, (ProviderError, ProjectStoreError, ContinuityError)) else "The verified render metadata could not be persisted."
             try:
                 self._project_store.set_scene_status(
                     project_id, scene_id, "failed", error=safe_error
@@ -252,6 +272,33 @@ class ComfyUIMiniMaxH3Handler:
             except ProjectStoreError:
                 pass
             raise HTTPError(422, safe_error, code="MINIMAX_H3_RENDER_FAILED") from exc
+
+    def _resolve_render_input(self, project: H3Project, scene: H3Scene) -> Path:
+        if scene.mode == "same_character_new_shot":
+            raise ProjectStoreError(
+                "Same Character, New Shot is unavailable because the verified workflow has no separate character input."
+            )
+        if scene.mode == "new_shot":
+            if not scene.reference_image:
+                raise ProjectStoreError("New Shot requires a selected reference image.")
+            return Path(scene.reference_image)
+
+        source_scene = previous_scene(project, scene.id)
+        source_version = selected_completed_version(source_scene)
+        matching = next((artifact for artifact in reversed(scene.continuity_artifacts) if (
+            artifact.source_scene_id == source_scene.id
+            and artifact.source_render_version_id == source_version.id
+            and artifact.strategy == scene.continuity_strategy
+            and artifact.offset_from_end_frames == (
+                scene.continuity_offset_frames if scene.continuity_strategy == "offset_from_end" else 0
+            )
+            and Path(artifact.image_file).is_file()
+        )), None)
+        if matching is None:
+            paths = resolve_h3_runtime_paths()
+            matching = H3ContinuityExtractor(paths.ffmpeg, paths.ffprobe).extract(project, scene)
+            project = self._project_store.add_continuity_artifact(project.id, scene.id, matching)
+        return Path(matching.image_file)
 
     @staticmethod
     def _project_call(operation: Callable[[], T]) -> T:

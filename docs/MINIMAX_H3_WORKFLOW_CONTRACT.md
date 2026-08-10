@@ -2,7 +2,7 @@
 
 Status: `REAL_SINGLE_SCENE_PROVIDER_VERIFIED` as of 2026-08-09.
 
-This contract records facts from the supplied repository evidence and the first real H3 Director provider execution. It does not claim that cancellation, websocket progress, lifecycle management, restart, cache control, continuity, editor integration, or multi-scene orchestration is implemented.
+This contract records facts from the supplied repository evidence and verified H3 Director executions. Manual per-scene continuity can derive the workflow's single input image from a completed previous-scene render, but it does not change or extend the verified workflow controls. It does not claim that cancellation, websocket progress, lifecycle management, restart, cache control, automatic sequencing, or multi-scene orchestration is implemented.
 
 ## Evidence reviewed
 
@@ -186,4 +186,4 @@ The new immutable `v001/video.mp4` and the ComfyUI source output are byte-identi
 
 A tested, read-only `ComfyUIRuntimeProbe` and workflow-contract validator enforce runtime compatibility. The development-only `ComfyUIMiniMaxH3Provider` adds one-image staging, one `/prompt` submission, history polling, safe output discovery, bundled-ffprobe verification, and immutable local render versioning. All ComfyUI connections are loopback HTTP. Neither component exposes the graph in the frontend or manages/bundles the runtime.
 
-Do not infer additional controls from this success. Websocket progress, cancellation, lifecycle ownership, restart, cache controls, continuity, editor integration, and multi-scene orchestration remain outside this milestone.
+Do not infer additional workflow controls from this success. Websocket progress, cancellation, lifecycle ownership, restart, cache controls, automatic sequencing, and multi-scene orchestration remain outside this milestone. The manual continuity foundation only selects an immutable ffmpeg-extracted previous-scene frame for the already documented input-image field.

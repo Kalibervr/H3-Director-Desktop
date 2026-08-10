@@ -150,6 +150,8 @@ H3SceneStatus = Literal[
     "idle", "queued", "preparing", "submitted", "rendering", "encoding",
     "verifying", "complete", "failed", "cancelled",
 ]
+H3SceneMode = Literal["new_shot", "continue_previous", "same_character_new_shot"]
+H3ContinuityStrategy = Literal["last_valid_frame", "offset_from_end"]
 
 
 class H3ProjectSettings(BaseModel):
@@ -184,6 +186,27 @@ class H3RenderVersion(BaseModel):
     ffprobe: MiniMaxH3VideoProbeResponse
 
 
+class H3ContinuityArtifact(BaseModel):
+    model_config = ConfigDict(strict=True)
+    id: str
+    number: int = Field(ge=1)
+    created_at: str
+    root: str
+    image_file: str
+    metadata_file: str
+    image_sha256: str
+    source_scene_id: str
+    source_render_version_id: str
+    source_video_reference: str
+    source_video_sha256: str
+    frame_index: int = Field(ge=0)
+    timestamp_seconds: float = Field(ge=0)
+    strategy: H3ContinuityStrategy
+    offset_from_end_frames: int = Field(ge=0)
+    source_frame_count: int = Field(ge=1)
+    source_fps: str
+
+
 class H3Scene(BaseModel):
     model_config = ConfigDict(strict=True)
     id: str
@@ -198,6 +221,11 @@ class H3Scene(BaseModel):
     duration_seconds: float = Field(gt=0)
     frame_count: int = Field(ge=1)
     seed: int = Field(ge=0, le=0xFFFFFFFFFFFFFFFF)
+    mode: H3SceneMode
+    continuity_strategy: H3ContinuityStrategy
+    continuity_offset_frames: int = Field(ge=0)
+    selected_continuity_artifact_id: str | None
+    continuity_artifacts: list[H3ContinuityArtifact]
     status: H3SceneStatus
     selected_render_version_id: str | None
     render_versions: list[H3RenderVersion]
@@ -207,7 +235,7 @@ class H3Scene(BaseModel):
 
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[2]
+    schema_version: Literal[3]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str
@@ -246,6 +274,9 @@ class H3SceneUpdateRequest(BaseModel):
     frame_count: int | None = Field(default=None, ge=1)
     seed: int | None = Field(default=None, ge=0, le=0xFFFFFFFFFFFFFFFF)
     selected_render_version_id: str | None = None
+    mode: H3SceneMode | None = None
+    continuity_strategy: H3ContinuityStrategy | None = None
+    continuity_offset_frames: int | None = Field(default=None, ge=0)
 
 
 class H3ProjectRenderRequest(BaseModel):
@@ -256,6 +287,12 @@ class H3ProjectRenderRequest(BaseModel):
 class H3SceneReorderRequest(BaseModel):
     model_config = ConfigDict(strict=True)
     scene_ids: list[str] = Field(min_length=1, max_length=999)
+
+
+class H3ContinuityPrepareResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+    project: H3Project
+    artifact: H3ContinuityArtifact
 
 
 class GenerationProgressResponse(BaseModel):
