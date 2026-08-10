@@ -1,4 +1,4 @@
-import type { FlatSegment } from './timeline'
+import type { DissolveBoundary, FlatSegment } from './timeline'
 
 export interface ExportSubtitle {
   text: string; startTime: number; endTime: number;
@@ -15,9 +15,10 @@ export function buildVideoFilterGraph(
     width: number; height: number; fps: number;
     letterbox?: { ratio: number; color: string; opacity: number };
     subtitles?: ExportSubtitle[];
+    dissolves?: DissolveBoundary[];
   },
 ): { inputs: string[]; filterScript: string } {
-  const { width, height, fps, letterbox, subtitles } = opts
+  const { width, height, fps, letterbox, subtitles, dissolves = [] } = opts
   const inputs: string[] = []
   const filterParts: string[] = []
   let idx = 0
@@ -28,7 +29,7 @@ export function buildVideoFilterGraph(
     if (seg.type === 'gap') {
       // Gap: generate black frames at target fps (synthetic input)
       inputs.push('-f', 'lavfi', '-i', `color=c=black:s=${width}x${height}:r=${fps}:d=${seg.duration.toFixed(6)}`)
-      filterParts.push(`[${idx}:v]setsar=1[v${i}]`)
+      filterParts.push(`[${idx}:v]setsar=1${dissolves.length > 0 ? `,fps=${fps}` : ''}[v${i}]`)
       idx++
     } else if (seg.type === 'image') {
       // Image: loop for exact duration, use target fps for frame generation
@@ -36,6 +37,7 @@ export function buildVideoFilterGraph(
       let chain = `[${idx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:-1:-1:color=black,setsar=1`
       if (seg.flipH) chain += ',hflip'
       if (seg.flipV) chain += ',vflip'
+      if (dissolves.length > 0) chain += `,fps=${fps}`
       chain += `[v${i}]`
       filterParts.push(chain)
       idx++
@@ -50,20 +52,51 @@ export function buildVideoFilterGraph(
       chain += `,scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:-1:-1:color=black,setsar=1`
       if (seg.flipH) chain += ',hflip'
       if (seg.flipV) chain += ',vflip'
+      if (dissolves.length > 0) chain += `,fps=${fps}`
       chain += `[v${i}]`
       filterParts.push(chain)
       idx++
     }
   }
 
-  const concatInputs = segments.map((_, i) => `[v${i}]`).join('')
-
-  // Concat all segments, then apply fps ONCE to the entire output.
-  // This is how real NLEs work: frame rate conversion happens globally,
-  // not per-clip, so per-segment duration quantization doesn't accumulate.
   let lastLabel = 'fpsout'
-  filterParts.push(`${concatInputs}concat=n=${segments.length}:v=1:a=0[concatraw]`)
-  filterParts.push(`[concatraw]fps=${fps}[${lastLabel}]`)
+  if (dissolves.length === 0) {
+    const concatInputs = segments.map((_, i) => `[v${i}]`).join('')
+    // Concat all segments, then apply fps ONCE to the entire output.
+    // This is how real NLEs work: frame rate conversion happens globally,
+    // not per-clip, so per-segment duration quantization doesn't accumulate.
+    filterParts.push(`${concatInputs}concat=n=${segments.length}:v=1:a=0[concatraw]`)
+    filterParts.push(`[concatraw]fps=${fps}[${lastLabel}]`)
+  } else {
+    const dissolveByIncomingIndex = new Map(dissolves.map(dissolve => [dissolve.incomingSegmentIndex, dissolve]))
+    let chainLabel = 'v0'
+    let chainDuration = segments[0].duration
+
+    for (let index = 1; index < segments.length; index++) {
+      const dissolve = dissolveByIncomingIndex.get(index)
+      if (dissolve) {
+        if (dissolve.outgoingSegmentIndex !== index - 1) {
+          throw new Error('Invalid dissolve boundary: clips must be adjacent.')
+        }
+        const stillLabel = `dissolveStill${index}`
+        const transitionLabel = `dissolve${index}`
+        const concatLabel = `concat${index}`
+        // This deliberately matches the current ProgramMonitor: during the
+        // outgoing tail, it blends to the incoming clip's first frame without
+        // moving the incoming clip's timeline start.
+        filterParts.push(`[v${index}]select='eq(n\\,0)',loop=loop=-1:size=1:start=0,trim=duration=${dissolve.duration.toFixed(6)},setpts=PTS-STARTPTS[${stillLabel}]`)
+        filterParts.push(`[${chainLabel}][${stillLabel}]xfade=transition=fade:duration=${dissolve.duration.toFixed(6)}:offset=${(chainDuration - dissolve.duration).toFixed(6)}[${transitionLabel}]`)
+        filterParts.push(`[${transitionLabel}][v${index}]concat=n=2:v=1:a=0[${concatLabel}]`)
+        chainLabel = concatLabel
+      } else {
+        const concatLabel = `concat${index}`
+        filterParts.push(`[${chainLabel}][v${index}]concat=n=2:v=1:a=0[${concatLabel}]`)
+        chainLabel = concatLabel
+      }
+      chainDuration += segments[index].duration
+    }
+    filterParts.push(`[${chainLabel}]fps=${fps}[${lastLabel}]`)
+  }
 
   // Letterbox overlay (drawbox)
   if (letterbox) {

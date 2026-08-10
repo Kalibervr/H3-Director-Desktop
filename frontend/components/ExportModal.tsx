@@ -166,6 +166,7 @@ export function ExportModal({ projectName }: ExportModalProps) {
       .filter(clip => clip.type === 'video' || clip.type === 'image' || clip.type === 'audio')
       .filter(clip => tracks[clip.trackIndex]?.enabled !== false)
       .map(clip => ({
+        id: clip.id,
         path: selectClipPathFromAssets(assets, clip),
         type: clip.type,
         startTime: clip.startTime,
@@ -179,6 +180,8 @@ export function ExportModal({ projectName }: ExportModalProps) {
         trackIndex: clip.trackIndex,
         muted: clip.muted || false,
         volume: clip.volume ?? 1,
+        transitionIn: clip.transitionIn,
+        transitionOut: clip.transitionOut,
       }))
   ), [assets, clips, tracks])
 

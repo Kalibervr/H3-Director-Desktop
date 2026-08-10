@@ -5,7 +5,7 @@ import { getAllowedRoots } from '../config'
 import { logger } from '../logger'
 import { validatePath } from '../path-validation'
 import { findFfmpegPath, runFfmpeg, stopExportProcess } from './ffmpeg-utils'
-import { flattenTimeline } from './timeline'
+import { buildVisualExportPlan, TransitionConfigurationError } from './timeline'
 import { buildVideoFilterGraph } from './video-filter'
 import { mixAudioToPcm } from './audio-mix'
 import { handle } from '../ipc/typed-handle'
@@ -25,7 +25,16 @@ export function registerExportHandlers(): void {
       return { success: false, error: String(err) }
     }
 
-    const segments = flattenTimeline(clips)
+    let visualPlan: ReturnType<typeof buildVisualExportPlan>
+    try {
+      visualPlan = buildVisualExportPlan(clips)
+    } catch (err) {
+      if (err instanceof TransitionConfigurationError) {
+        return { success: false, error: err.message }
+      }
+      throw err
+    }
+    const { segments, dissolves } = visualPlan
     if (segments.length === 0) return { success: false, error: 'No clips to export' }
 
     for (const seg of segments) {
@@ -44,9 +53,9 @@ export function registerExportHandlers(): void {
     }
 
     try {
-      logger.info( `[Export] Step 1: Video-only export (${segments.length} segments)`)
+      logger.info( `[Export] Step 1: Video-only export (${segments.length} segments, ${dissolves.length} dissolve transition(s))`)
       {
-        const { inputs, filterScript } = buildVideoFilterGraph(segments, { width, height, fps, letterbox, subtitles })
+        const { inputs, filterScript } = buildVideoFilterGraph(segments, { width, height, fps, letterbox, subtitles, dissolves })
 
         const filterFile = path.join(tmpDir, `ltx-filter-v-${ts}.txt`)
         fs.writeFileSync(filterFile, filterScript, 'utf8')

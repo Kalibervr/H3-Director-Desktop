@@ -13,7 +13,16 @@ export type IpcResult<T extends z.ZodRawShape> = z.infer<ReturnType<typeof ipcRe
 
 const emptyResult = ipcResult({})
 
+const exportTransition = z.object({
+  type: z.enum([
+    'none', 'dissolve', 'fade-to-black', 'fade-to-white',
+    'wipe-left', 'wipe-right', 'wipe-up', 'wipe-down',
+  ]),
+  duration: z.number(),
+})
+
 const exportClip = z.object({
+  id: z.string().optional(),
   path: z.string(),
   type: z.string(),
   startTime: z.number(),
@@ -27,6 +36,8 @@ const exportClip = z.object({
   trackIndex: z.number(),
   muted: z.boolean(),
   volume: z.number(),
+  transitionIn: exportTransition.optional(),
+  transitionOut: exportTransition.optional(),
 })
 
 const exportSubtitle = z.object({
