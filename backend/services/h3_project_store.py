@@ -101,7 +101,7 @@ class H3ProjectStore:
         timestamp = _now()
         scenes = [self._new_scene(number, _scene_storage_name(number)) for number in range(1, scene_count + 1)]
         project = H3Project(
-            schema_version=4,
+            schema_version=5,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
@@ -241,6 +241,10 @@ class H3ProjectStore:
         *,
         prompt_id: str | None = None,
         error: str | None = None,
+        phase: str | None = None,
+        progress_value: int | None = None,
+        progress_max: int | None = None,
+        diagnostics: str | None = None,
     ) -> H3Project:
         project = self.get_project(project_id)
         scenes = [
@@ -248,6 +252,10 @@ class H3ProjectStore:
                 "status": status,
                 "active_prompt_id": prompt_id if prompt_id is not None else scene.active_prompt_id,
                 "last_error": error,
+                "current_phase": phase or status,
+                "progress_value": progress_value,
+                "progress_max": progress_max,
+                "diagnostics": diagnostics,
             }) if scene.id == scene_id else scene
             for scene in project.scenes
         ]
@@ -275,6 +283,10 @@ class H3ProjectStore:
                 "status": "complete",
                 "active_prompt_id": version.prompt_id,
                 "last_error": None,
+                "current_phase": "Complete",
+                "progress_value": None,
+                "progress_max": None,
+                "diagnostics": None,
             }))
         if not found:
             raise ProjectStoreError("The selected scene could not be found.")
@@ -355,6 +367,10 @@ class H3ProjectStore:
             render_versions=[],
             last_error=None,
             active_prompt_id=None,
+            current_phase=None,
+            progress_value=None,
+            progress_max=None,
+            diagnostics=None,
         )
 
     @staticmethod
@@ -394,19 +410,29 @@ class H3ProjectStore:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             original_schema = payload.get("schema_version")
-            migrated = original_schema in {1, 2, 3}
+            migrated = original_schema in {1, 2, 3, 4}
             if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
             if migrated:
-                payload["schema_version"] = 4
+                payload["schema_version"] = 5
                 for scene in payload.get("scenes", []):
                     scene.setdefault("mode", "new_shot")
                     scene.setdefault("continuity_strategy", "last_valid_frame")
                     scene.setdefault("continuity_offset_frames", 0)
                     scene.setdefault("selected_continuity_artifact_id", None)
                     scene.setdefault("continuity_artifacts", [])
+                    scene.setdefault("current_phase", None)
+                    scene.setdefault("progress_value", None)
+                    scene.setdefault("progress_max", None)
+                    scene.setdefault("diagnostics", None)
                 payload.setdefault("render_runs", [])
+                for run in payload.get("render_runs", []):
+                    for item in run.get("items", []):
+                        item.setdefault("current_phase", None)
+                        item.setdefault("progress_value", None)
+                        item.setdefault("progress_max", None)
+                        item.setdefault("diagnostics", None)
             project = H3Project.model_validate(payload)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             raise ProjectStoreError("The local project metadata is invalid or unreadable.") from exc

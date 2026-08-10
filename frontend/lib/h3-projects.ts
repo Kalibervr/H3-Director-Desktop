@@ -15,11 +15,15 @@ export interface H3SequenceItem {
   prompt_id: string | null
   continuity_artifact_id: string | null
   error: string | null
+  current_phase: string | null
+  progress_value: number | null
+  progress_max: number | null
+  diagnostics: string | null
 }
 
 export interface H3RenderRun {
   id: string
-  kind: 'from_here' | 'all'
+  kind: 'scene' | 'from_here' | 'all'
   status: 'running' | 'complete' | 'failed' | 'cancelled'
   started_at: string
   completed_at: string | null
@@ -105,10 +109,14 @@ export interface H3Scene {
   render_versions: H3RenderVersion[]
   last_error: string | null
   active_prompt_id: string | null
+  current_phase: string | null
+  progress_value: number | null
+  progress_max: number | null
+  diagnostics: string | null
 }
 
 export interface H3Project {
-  schema_version: 4
+  schema_version: 5
   id: string
   name: string
   created_at: string
@@ -193,7 +201,7 @@ export async function renderH3ProjectScene(projectId: string, sceneId: string): 
   }))
 }
 
-export async function startH3Sequence(projectId: string, kind: 'from_here' | 'all', startSceneId?: string): Promise<H3RenderRun> {
+export async function startH3Sequence(projectId: string, kind: 'scene' | 'from_here' | 'all', startSceneId?: string): Promise<H3RenderRun> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/sequences`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ base_url: 'http://127.0.0.1:8188', kind, start_scene_id: startSceneId ?? null }),

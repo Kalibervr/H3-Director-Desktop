@@ -18,6 +18,8 @@ from typing import Any, Callable, Protocol, cast
 from urllib.parse import quote, urlsplit
 
 import requests
+from websockets.sync.client import connect as websocket_connect
+from websockets.exceptions import WebSocketException
 from PIL import Image
 
 from server_utils.loopback_url import require_loopback_http_url
@@ -34,6 +36,10 @@ OUTPUT_NODE_ID = "92"
 
 class ProviderError(RuntimeError):
     """A safe error whose message may be returned to a local client."""
+
+    def __init__(self, message: str, *, diagnostics: str | None = None) -> None:
+        super().__init__(message)
+        self.diagnostics = diagnostics
 
 
 class HttpResponse(Protocol):
@@ -79,6 +85,63 @@ class RenderResult:
     output_file: Path
     metadata_file: Path
     video: VideoProbe
+
+
+@dataclass(frozen=True)
+class RenderProgress:
+    phase: str
+    value: int | None = None
+    maximum: int | None = None
+    terminal: str | None = None
+    diagnostics: str | None = None
+
+
+_EXECUTING_PHASES = {
+    "105:104": "Preparing generation",
+    "105:16": "Preparing generation",
+    "105:15": "Preparing generation",
+    "105:14": "Sampling",
+    "105:23": "Decoding",
+    "105:10": "Decoding",
+    "105:91": "Encoding",
+    "92": "Encoding",
+}
+
+
+def parse_comfyui_progress_event(message: object, prompt_id: str) -> RenderProgress | None:
+    if not isinstance(message, str):
+        return None
+    try:
+        event = _json_object(json.loads(message))
+        event_type = event.get("type")
+        data = _json_object(event.get("data"))
+    except (ProviderError, json.JSONDecodeError, TypeError):
+        return None
+    event_prompt_id = data.get("prompt_id")
+    if event_prompt_id not in (None, prompt_id):
+        return None
+    if event_type in {"execution_start", "execution_cached"}:
+        return RenderProgress("Preparing")
+    if event_type == "executing":
+        node = data.get("node")
+        return RenderProgress(_EXECUTING_PHASES[node]) if isinstance(node, str) and node in _EXECUTING_PHASES else None
+    if event_type == "progress" and data.get("node") == "105:14":
+        value, maximum = data.get("value"), data.get("max")
+        if isinstance(value, int) and isinstance(maximum, int) and 0 <= value <= maximum and maximum > 0:
+            return RenderProgress("Sampling", value, maximum)
+        return None
+    if event_type == "executed" and data.get("node") == OUTPUT_NODE_ID:
+        return RenderProgress("Encoding")
+    if event_type == "execution_success":
+        return RenderProgress("Verifying", terminal="success")
+    if event_type == "execution_error":
+        node_type = data.get("node_type")
+        exception_type = data.get("exception_type")
+        safe_node = node_type if isinstance(node_type, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,80}", node_type) else "unknown node"
+        safe_exception = exception_type if isinstance(exception_type, str) and re.fullmatch(r"[A-Za-z0-9_.:-]{1,120}", exception_type) else "execution error"
+        diagnostics = f"{safe_node} · {safe_exception}"
+        return RenderProgress("Failed", terminal="error", diagnostics=diagnostics)
+    return None
 
 
 def _json_object(value: object) -> JsonObject:
@@ -317,13 +380,19 @@ class ComfyUIMiniMaxH3Provider:
         request: SingleSceneRequest,
         timeout_seconds: float = 1800.0,
         poll_interval_seconds: float = 2.0,
-        status_callback: Callable[[str, str | None], None] | None = None,
+        status_callback: Callable[[str, str | None, int | None, int | None, str | None], None] | None = None,
     ) -> RenderResult:
-        def report(status: str, prompt_id: str | None = None) -> None:
+        def report(
+            status: str,
+            prompt_id: str | None = None,
+            value: int | None = None,
+            maximum: int | None = None,
+            diagnostics: str | None = None,
+        ) -> None:
             if status_callback is not None:
-                status_callback(status, prompt_id)
+                status_callback(status, prompt_id, value, maximum, diagnostics)
 
-        report("preparing")
+        report("Preparing")
         try:
             normalized_url = require_loopback_http_url(base_url)
             if urlsplit(normalized_url).scheme != "http":
@@ -345,23 +414,34 @@ class ComfyUIMiniMaxH3Provider:
         staged_name = self._upload_image(normalized_url, request.input_image)
         client_id = uuid.uuid4().hex
         payload = build_prompt_payload(template, request, staged_name, client_id)
+        websocket_url = normalized_url.replace("http://", "ws://", 1) + f"/ws?clientId={client_id}"
         try:
-            response = self._session.post(
-                f"{normalized_url}/prompt", json=payload, timeout=30.0, allow_redirects=False
-            )
-            submission = _json_object(_safe_json(response))
+            with websocket_connect(websocket_url, open_timeout=15, close_timeout=5, max_size=16 * 1024 * 1024) as websocket:
+                response = self._session.post(
+                    f"{normalized_url}/prompt", json=payload, timeout=30.0, allow_redirects=False
+                )
+                submission = _json_object(_safe_json(response))
+                prompt_id = submission.get("prompt_id")
+                if not isinstance(prompt_id, str) or not prompt_id:
+                    raise ProviderError("Local ComfyUI did not return a prompt ID.")
+                report("Submitted", prompt_id)
+                while True:
+                    message = websocket.recv(timeout=timeout_seconds)
+                    update = parse_comfyui_progress_event(message, prompt_id)
+                    if update is None:
+                        continue
+                    report(update.phase, prompt_id, update.value, update.maximum, update.diagnostics)
+                    if update.terminal == "error":
+                        raise ProviderError("Local ComfyUI failed while rendering the scene.", diagnostics=update.diagnostics)
+                    if update.terminal == "success":
+                        break
         except ProviderError:
             raise
-        except requests.RequestException as exc:
-            raise ProviderError("The scene could not be submitted to local ComfyUI.") from exc
-        prompt_id = submission.get("prompt_id")
-        if not isinstance(prompt_id, str) or not prompt_id:
-            raise ProviderError("Local ComfyUI did not return a prompt ID.")
-        report("submitted", prompt_id)
+        except (OSError, TimeoutError, requests.RequestException, WebSocketException) as exc:
+            raise ProviderError("The local ComfyUI progress stream became unavailable.") from exc
 
         deadline = time.monotonic() + timeout_seconds
         source_output: Path | None = None
-        reported_rendering = False
         while time.monotonic() < deadline:
             try:
                 history_response = self._session.get(
@@ -376,14 +456,11 @@ class ComfyUIMiniMaxH3Provider:
                 raise ProviderError("Local ComfyUI history is unavailable.") from exc
             if source_output is not None:
                 break
-            if not reported_rendering:
-                report("rendering", prompt_id)
-                reported_rendering = True
             self._sleep(poll_interval_seconds)
         if source_output is None:
             raise ProviderError("The local ComfyUI render timed out.")
 
-        report("verifying", prompt_id)
+        report("Verifying", prompt_id)
         video = probe_video(self._ffprobe_path, source_output)
         version_dir, output, metadata = create_immutable_render_version(
             self._render_root, source_output, prompt_id, request, video

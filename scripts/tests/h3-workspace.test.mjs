@@ -38,7 +38,7 @@ test('renderer calls only local sanitized project and MiniMax H3 backend boundar
 test('workspace exposes disk persistence, immutable versions and truthful phase status', () => {
   const home = read('frontend/views/Home.tsx')
   const projectClient = read('frontend/lib/h3-projects.ts')
-  for (const label of ['Render version', 'Retry Render', 'Phase status only', 'Preparing input', 'Verifying with ffprobe']) {
+  for (const label of ['Render version', 'Retry Render', 'Real sampler progress only', 'Preparing input', 'Verifying with ffprobe']) {
     assert.match(home, new RegExp(label))
   }
   assert.match(projectClient, /selected_render_version_id/)
@@ -62,7 +62,18 @@ test('workspace exposes manual continuity with ordered queue controls', () => {
   for (const label of ['Scene Mode', 'New Shot', 'Continue Previous', 'Same Character, New Shot', 'Continuity source', 'Extraction strategy', 'Offset from end', 'Extract Continuity Frame']) assert.match(home, new RegExp(label))
   assert.match(projectClient, /prepareH3Continuity/)
   assert.match(projectClient, /continuity_artifacts/)
-  for (const label of ['Render From Here', 'Render All', 'Render queue', 'Stop after current scene']) assert.match(home, new RegExp(label))
+  for (const label of ['Render From Here', 'Render All', 'Run history', 'Stop after current scene']) assert.match(home, new RegExp(label))
   for (const operation of ['startH3Sequence', 'stopH3Sequence', 'render_runs']) assert.match(projectClient, new RegExp(operation))
   assert.doesNotMatch(home, /\d+% complete|automatic retry/i)
+})
+
+test('director workspace exposes persistent run history, verified progress and version navigation', () => {
+  const home = read('frontend/views/Home.tsx')
+  const storyboard = read('frontend/components/SceneStoryboard.tsx')
+  const projectClient = read('frontend/lib/h3-projects.ts')
+  for (const label of ['Run history', 'Elapsed', 'Technical diagnostics', 'Previous version', 'Next version', 'Prompt ID']) assert.match(home, new RegExp(label))
+  assert.match(home + storyboard, /progress_value/)
+  assert.match(home + storyboard, /progress_max/)
+  assert.match(projectClient, /current_phase/)
+  assert.doesNotMatch(home + storyboard, /setInterval\([^)]*progress|estimated progress|smooth/i)
 })

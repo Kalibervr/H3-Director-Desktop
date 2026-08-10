@@ -16,7 +16,7 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-RenderScene = Callable[[str, str, H3ProjectRenderRequest, Callable[[str], None]], object]
+RenderScene = Callable[[str, str, H3ProjectRenderRequest, Callable[[str, int | None, int | None, str | None], None]], object]
 
 
 class H3SequenceCoordinator:
@@ -39,7 +39,13 @@ class H3SequenceCoordinator:
     ) -> H3RenderRun:
         project = self._store.get_project(project_id)
         ordered = sorted(project.scenes, key=lambda scene: scene.order)
-        if kind == "from_here":
+        if kind == "scene":
+            if not start_scene_id:
+                raise ProjectStoreError("Render Scene requires a selected scene.")
+            ordered = [scene for scene in ordered if scene.id == start_scene_id]
+            if not ordered:
+                raise ProjectStoreError("The selected scene could not be found.")
+        elif kind == "from_here":
             if not start_scene_id:
                 raise ProjectStoreError("Render From Here requires a selected scene.")
             start_index = next((index for index, scene in enumerate(ordered) if scene.id == start_scene_id), None)
@@ -90,13 +96,15 @@ class H3SequenceCoordinator:
                 if key in self._stop_requests:
                     self._cancel_remaining(project_id, run_id, "Stopped after the previous scene completed.")
                     return
-                self._set_item(project_id, run_id, scene_id, "preparing", started_at=_now())
+                self._set_item(project_id, run_id, scene_id, "preparing", started_at=_now(), current_phase="Preparing")
                 try:
                     self._render_scene(
                         project_id,
                         scene_id,
                         request,
-                        lambda phase, sid=scene_id: self._phase(project_id, run_id, sid, phase),
+                        lambda phase, value, maximum, diagnostics, sid=scene_id: self._phase(
+                            project_id, run_id, sid, phase, value, maximum, diagnostics
+                        ),
                     )
                     project = self._store.get_project(project_id)
                     scene = next(item for item in project.scenes if item.id == scene_id)
@@ -106,10 +114,17 @@ class H3SequenceCoordinator:
                         project_id, run_id, scene_id, "complete", completed_at=_now(),
                         render_version_id=version.id, prompt_id=version.prompt_id,
                         continuity_artifact_id=artifact_id,
+                        current_phase="Complete", progress_value=None, progress_max=None,
                     )
                 except Exception as exc:
                     message = str(exc).strip() if isinstance(exc, (HTTPError, ProjectStoreError)) else "The scene render failed safely."
-                    self._set_item(project_id, run_id, scene_id, "failed", completed_at=_now(), error=message)
+                    project = self._store.get_project(project_id)
+                    failed_scene = next((item for item in project.scenes if item.id == scene_id), None)
+                    self._set_item(
+                        project_id, run_id, scene_id, "failed", completed_at=_now(), error=message,
+                        current_phase="Failed", progress_value=None, progress_max=None,
+                        diagnostics=failed_scene.diagnostics if failed_scene else None,
+                    )
                     self._fail_remaining(project_id, run_id, message)
                     return
                 if key in self._stop_requests:
@@ -121,13 +136,20 @@ class H3SequenceCoordinator:
                 self._stop_requests.discard(key)
                 self._threads.pop(key, None)
 
-    def _phase(self, project_id: str, run_id: str, scene_id: str, phase: str) -> None:
+    def _phase(
+        self, project_id: str, run_id: str, scene_id: str, phase: str,
+        value: int | None, maximum: int | None, diagnostics: str | None,
+    ) -> None:
         state = {
-            "queued": "preparing", "preparing": "preparing", "submitted": "rendering",
-            "rendering": "rendering", "encoding": "rendering", "verifying": "verifying",
+            "Preparing": "preparing", "Submitted": "rendering",
+            "Preparing generation": "rendering", "Sampling": "rendering",
+            "Decoding": "rendering", "Encoding": "rendering", "Verifying": "verifying",
         }.get(phase)
         if state:
-            self._set_item(project_id, run_id, scene_id, state)
+            self._set_item(
+                project_id, run_id, scene_id, state, current_phase=phase,
+                progress_value=value, progress_max=maximum, diagnostics=diagnostics,
+            )
 
     def _set_item(self, project_id: str, run_id: str, scene_id: str, state: str, **changes: object) -> None:
         with self._lock:

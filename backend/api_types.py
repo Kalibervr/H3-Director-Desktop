@@ -152,7 +152,7 @@ H3SceneStatus = Literal[
 ]
 H3SceneMode = Literal["new_shot", "continue_previous", "same_character_new_shot"]
 H3ContinuityStrategy = Literal["last_valid_frame", "offset_from_end"]
-H3SequenceKind = Literal["from_here", "all"]
+H3SequenceKind = Literal["scene", "from_here", "all"]
 H3QueueState = Literal[
     "waiting", "preparing", "rendering", "verifying", "complete", "failed",
     "skipped", "cancelled",
@@ -237,6 +237,10 @@ class H3Scene(BaseModel):
     render_versions: list[H3RenderVersion]
     last_error: str | None
     active_prompt_id: str | None
+    current_phase: str | None
+    progress_value: int | None = Field(default=None, ge=0)
+    progress_max: int | None = Field(default=None, ge=1)
+    diagnostics: str | None
 
 
 class H3SequenceItem(BaseModel):
@@ -250,6 +254,10 @@ class H3SequenceItem(BaseModel):
     prompt_id: str | None = None
     continuity_artifact_id: str | None = None
     error: str | None = None
+    current_phase: str | None = None
+    progress_value: int | None = Field(default=None, ge=0)
+    progress_max: int | None = Field(default=None, ge=1)
+    diagnostics: str | None = None
 
 
 class H3RenderRun(BaseModel):
@@ -268,7 +276,7 @@ class H3RenderRun(BaseModel):
 
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[4]
+    schema_version: Literal[5]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str

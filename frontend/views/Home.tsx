@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Aperture, Clapperboard, Film, Folder, ImagePlus,
-  Loader2, Plus, RotateCcw, Sparkles, Square,
+  ChevronLeft, ChevronRight, Loader2, Plus, RotateCcw, Sparkles, Square,
 } from 'lucide-react'
 import { SceneStoryboard } from '../components/SceneStoryboard'
 import { pathToFileUrl } from '../lib/file-url'
@@ -15,7 +15,6 @@ import {
   listH3Projects,
   prepareH3Continuity,
   renameH3Project,
-  renderH3ProjectScene,
   startH3Sequence,
   stopH3Sequence,
   reorderH3Scenes,
@@ -65,11 +64,14 @@ export function Home() {
   const [preparingContinuity, setPreparingContinuity] = useState(false)
   const [sequenceStarting, setSequenceStarting] = useState(false)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
+  const [clock, setClock] = useState(Date.now())
   const saveTimer = useRef<number | null>(null)
   const pendingSave = useRef<{ projectId: string; sceneId: string; changes: Partial<H3Scene> } | null>(null)
   const scene = selectedScene(project)
   const activeRun = project?.render_runs.find(run => run.status === 'running') ?? null
   const latestRun = activeRun ?? project?.render_runs.at(-1) ?? null
+  const viewedRun = project?.render_runs.find(run => run.id === selectedRunId) ?? latestRun
 
   const replaceProject = (next: H3Project) => {
     setProject(next)
@@ -116,6 +118,11 @@ export function Home() {
 
   useEffect(() => () => {
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
+  }, [])
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setClock(Date.now()), 1_000)
+    return () => window.clearInterval(interval)
   }, [])
 
   const updateSceneLocally = (changes: Partial<H3Scene>) => {
@@ -217,8 +224,10 @@ export function Home() {
         width: scene.width, height: scene.height, fps: scene.fps,
         duration_seconds: scene.duration_seconds, frame_count: scene.frame_count,
       })
-      replaceProject({ ...saved, scenes: saved.scenes.map(item => item.id === scene.id ? { ...item, status: 'queued' } : item) })
-      replaceProject(await renderH3ProjectScene(project.id, scene.id))
+      replaceProject({ ...saved, scenes: saved.scenes.map(item => item.id === scene.id ? { ...item, status: 'queued', current_phase: 'Waiting' } : item) })
+      const run = await startH3Sequence(project.id, 'scene', scene.id)
+      setSelectedRunId(run.id)
+      replaceProject(await getH3Project(project.id))
       setSaveState('saved')
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : 'The local render failed.')
@@ -251,7 +260,8 @@ export function Home() {
     setWorkspaceError(null)
     try {
       await flushPendingSave()
-      await startH3Sequence(project.id, kind, kind === 'from_here' ? scene.id : undefined)
+      const run = await startH3Sequence(project.id, kind, kind === 'from_here' ? scene.id : undefined)
+      setSelectedRunId(run.id)
       replaceProject(await getH3Project(project.id))
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : 'The render queue could not be started.')
@@ -288,6 +298,11 @@ export function Home() {
   const modeHasInput = scene?.mode === 'continue_previous' ? Boolean(sourceVersion) : scene?.mode === 'new_shot' ? Boolean(scene.reference_image) : false
   const canRender = Boolean(project && scene?.prompt.trim() && modeHasInput && runtimeStatus === 'connected' && !rendering && !preparingContinuity)
   const phaseActive = scene ? ACTIVE_STATUSES.includes(scene.status) : false
+  const activeVersionIndex = scene?.render_versions.findIndex(version => version.id === scene.selected_render_version_id) ?? -1
+  const selectVersionAt = (index: number) => {
+    if (!project || !scene || index < 0 || index >= scene.render_versions.length) return
+    void updateH3Scene(project.id, scene.id, { selected_render_version_id: scene.render_versions[index].id }).then(replaceProject)
+  }
 
   return <div className="h-screen overflow-hidden bg-[#07090d] text-zinc-100">
     <div className="grid h-full grid-cols-[250px_minmax(0,1fr)_360px] grid-rows-[minmax(0,1fr)_150px]">
@@ -332,14 +347,14 @@ export function Home() {
         ].map(([label, value]) => <div key={label} className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">{label}</div><div className="mt-1 font-mono text-sm text-zinc-300">{value}</div></div>)}
           <label className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Seed</div><input type="number" disabled={!scene} value={scene?.seed ?? 0} onChange={event => updateSceneLocally({ seed: Number(event.target.value) })} className="mt-1 w-full bg-transparent font-mono text-sm text-zinc-300 outline-none" /></label>
         </div>
-        {!!scene?.render_versions.length && <label className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Render version<select value={scene.selected_render_version_id ?? ''} onChange={event => void updateH3Scene(project!.id, scene.id, { selected_render_version_id: event.target.value }).then(replaceProject)} className="mt-2 w-full rounded-xl border border-white/10 bg-[#11151c] px-3 py-3 text-sm normal-case tracking-normal text-zinc-300">{scene.render_versions.map(version => <option key={version.id} value={version.id}>v{String(version.number).padStart(3, '0')} · {new Date(version.created_at).toLocaleString()}</option>)}</select></label>}
+        {!!scene?.render_versions.length && <div className="mt-5"><div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Render version</div><div className="mt-2 flex gap-2"><button aria-label="Previous version" disabled={activeVersionIndex <= 0} onClick={() => selectVersionAt(activeVersionIndex - 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronLeft className="h-4 w-4" /></button><select value={scene.selected_render_version_id ?? ''} onChange={event => void updateH3Scene(project!.id, scene.id, { selected_render_version_id: event.target.value }).then(replaceProject)} className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#11151c] px-3 py-3 text-sm text-zinc-300">{scene.render_versions.map(version => <option key={version.id} value={version.id}>v{String(version.number).padStart(3, '0')} · {new Date(version.created_at).toLocaleString()}</option>)}</select><button aria-label="Next version" disabled={activeVersionIndex < 0 || activeVersionIndex >= scene.render_versions.length - 1} onClick={() => selectVersionAt(activeVersionIndex + 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronRight className="h-4 w-4" /></button></div>{activeVersion && <div className="mt-2 rounded-lg bg-white/[0.025] p-2 text-[10px] leading-5 text-zinc-500"><div>{new Date(activeVersion.created_at).toLocaleString()} · {activeVersion.width}×{activeVersion.height} · {activeVersion.duration_seconds}s</div><div>Seed {activeVersion.seed} · Prompt ID {activeVersion.prompt_id}</div></div>}</div>}
         {runtimeError && runtimeStatus !== 'connected' && <p className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200/70">{runtimeError}</p>}
-        {(workspaceError || scene?.last_error) && <p className="mt-4 rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-300">{workspaceError ?? scene?.last_error}</p>}
+        {(workspaceError || scene?.last_error) && <div className="mt-4 rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-300"><p>{workspaceError ?? scene?.last_error}</p>{scene?.diagnostics && <details className="mt-2 text-[10px] text-red-200/60"><summary className="cursor-pointer">Technical diagnostics</summary><div className="mt-1 font-mono">{scene.diagnostics}</div></details>}</div>}
         <button onClick={() => void renderScene()} disabled={!canRender || phaseActive || Boolean(activeRun)} className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-300 to-orange-500 px-4 py-3.5 text-sm font-bold text-zinc-950 disabled:opacity-30">{rendering || phaseActive ? <Loader2 className="h-4 w-4 animate-spin" /> : scene?.status === 'failed' ? <RotateCcw className="h-4 w-4" /> : <Clapperboard className="h-4 w-4" />}{rendering || phaseActive ? STATUS_LABELS[scene?.status ?? 'queued'] : scene?.status === 'failed' ? 'Retry Render' : scene?.render_versions.length ? 'Render New Version' : 'Render Scene'}</button>
         <div className="mt-3 grid grid-cols-2 gap-2"><button onClick={() => void startSequence('from_here')} disabled={!project || !scene || runtimeStatus !== 'connected' || Boolean(activeRun) || sequenceStarting} className="rounded-lg border border-amber-300/20 px-3 py-2.5 text-xs text-amber-200 disabled:opacity-30">Render From Here</button><button onClick={() => void startSequence('all')} disabled={!project || runtimeStatus !== 'connected' || Boolean(activeRun) || sequenceStarting} className="rounded-lg border border-amber-300/20 px-3 py-2.5 text-xs text-amber-200 disabled:opacity-30">Render All</button></div>
         {activeRun && <button onClick={() => void stopSequence(activeRun)} disabled={activeRun.stop_after_current_requested} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/20 px-3 py-2.5 text-xs text-red-300 disabled:opacity-40"><Square className="h-3 w-3" />{activeRun.stop_after_current_requested ? 'Stopping after current scene…' : 'Stop after current scene'}</button>}
-        {latestRun && <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3"><div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500"><span>Render queue</span><span>{latestRun.status}</span></div><div className="mt-2 space-y-1.5">{latestRun.items.map(item => { const queuedScene = project?.scenes.find(candidate => candidate.id === item.scene_id); return <div key={item.scene_id} className={`flex items-center justify-between rounded-lg px-2 py-1.5 text-[11px] ${latestRun.current_scene_id === item.scene_id ? 'bg-amber-300/10 text-amber-200' : 'bg-white/[0.025] text-zinc-500'}`}><span className="truncate">{queuedScene?.name ?? `Scene ${item.scene_order}`}</span><span className="ml-2 uppercase">{item.state}</span></div> })}</div>{latestRun.failure_or_cancel_reason && <p className="mt-2 text-[10px] text-red-300">{latestRun.failure_or_cancel_reason}</p>}</div>}
-        <p className="mt-3 text-center text-[10px] text-zinc-700">Phase status only · no invented percentage</p>
+        {viewedRun && <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3"><div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500"><span>{viewedRun.kind === 'scene' ? 'Render Scene' : viewedRun.kind === 'from_here' ? 'Render From Here' : 'Render All'}</span><span>{viewedRun.status}</span></div><div className="mt-1 font-mono text-[9px] text-zinc-700">Run {viewedRun.id}</div><div className="mt-2 text-[10px] text-zinc-500">Current scene: {project?.scenes.find(candidate => candidate.id === viewedRun.current_scene_id)?.name ?? 'None'}</div><div className="mt-2 grid grid-cols-2 gap-1 text-[10px] text-zinc-500"><span>Started {new Date(viewedRun.started_at).toLocaleString()}</span><span>Elapsed {Math.max(0, Math.floor(((viewedRun.completed_at ? new Date(viewedRun.completed_at).getTime() : clock) - new Date(viewedRun.started_at).getTime()) / 1000))}s</span><span>Complete {viewedRun.items.filter(item => item.state === 'complete').length}</span><span>Waiting {viewedRun.items.filter(item => item.state === 'waiting').length}</span><span>Failed {viewedRun.items.filter(item => item.state === 'failed').length}</span><span>Cancelled {viewedRun.items.filter(item => item.state === 'cancelled').length}</span></div><div className="mt-2 space-y-1.5">{viewedRun.items.map(item => { const queuedScene = project?.scenes.find(candidate => candidate.id === item.scene_id); const percent = item.progress_value !== null && item.progress_max ? Math.round(item.progress_value / item.progress_max * 100) : null; return <div key={item.scene_id} className={`rounded-lg px-2 py-1.5 text-[11px] ${viewedRun.current_scene_id === item.scene_id ? 'bg-amber-300/10 text-amber-200' : 'bg-white/[0.025] text-zinc-500'}`}><div className="flex justify-between"><span className="truncate">{queuedScene?.name ?? `Scene ${item.scene_order}`}</span><span className="ml-2 uppercase">{item.current_phase ?? item.state}{percent !== null ? ` · ${percent}%` : ''}</span></div>{item.render_version_id && <div className="mt-1 text-[9px] text-zinc-700">{item.render_version_id} · {item.prompt_id}{item.continuity_artifact_id ? ` · ${item.continuity_artifact_id}` : ''}</div>}{item.diagnostics && <details className="mt-1 text-[9px] text-red-300/60"><summary>Diagnostics</summary>{item.diagnostics}</details>}</div> })}</div>{viewedRun.failure_or_cancel_reason && <p className="mt-2 text-[10px] text-red-300">{viewedRun.failure_or_cancel_reason}</p>} {!!project?.render_runs.length && <label className="mt-3 block text-[9px] uppercase tracking-wider text-zinc-600">Run history<select value={viewedRun.id} onChange={event => setSelectedRunId(event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-[#11151c] px-2 py-2 text-[10px] normal-case text-zinc-400">{[...project.render_runs].reverse().map(run => <option key={run.id} value={run.id}>{run.kind} · {new Date(run.started_at).toLocaleString()} · {run.status}</option>)}</select></label>}</div>}
+        <p className="mt-3 text-center text-[10px] text-zinc-700">Real sampler progress only · phase otherwise</p>
       </aside>
 
       <SceneStoryboard project={project} statusLabels={STATUS_LABELS} onSelect={target => project && target.id !== project.selected_scene_id && void runSceneOperation(() => selectH3Scene(project.id, target.id))} onAdd={() => project && void runSceneOperation(() => addH3Scene(project.id))} onDuplicate={target => project && void runSceneOperation(() => duplicateH3Scene(project.id, target.id))} onDelete={target => project && void runSceneOperation(() => deleteH3Scene(project.id, target.id))} onMove={moveScene} />

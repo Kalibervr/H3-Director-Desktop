@@ -2,7 +2,7 @@
 
 Status: `REAL_SINGLE_SCENE_PROVIDER_VERIFIED` as of 2026-08-09.
 
-This contract records facts from the supplied repository evidence and verified H3 Director executions. H3 Director can run the immutable single-scene workflow in persisted project order through Render From Here or Render All, and manual continuity can derive its single input image from a completed previous-scene render. Neither behavior changes or extends the verified workflow controls. It does not claim that in-flight ComfyUI cancellation, websocket percentage progress, lifecycle management, restart recovery, cache control, or timeline orchestration is implemented.
+This contract records facts from the supplied repository evidence and verified H3 Director executions. H3 Director can run the immutable single-scene workflow in persisted project order through Render From Here or Render All, and manual continuity can derive its single input image from a completed previous-scene render. Neither behavior changes or extends the verified workflow controls. Verified ComfyUI WebSocket events provide truthful execution phases and sampler `value`/`max` progress; they do not provide a trustworthy global render percentage. In-flight ComfyUI cancellation, lifecycle management, restart recovery, cache control, and timeline orchestration are not implemented.
 
 ## Evidence reviewed
 
@@ -171,7 +171,7 @@ The new immutable `v001/video.mp4` and the ComfyUI source output are byte-identi
 
 - The exact ComfyUI source commit; the runtime reports version `0.30.2` only.
 - Additional `/upload/image` and successful `/prompt` response keys were not retained by the initial harness; only the fields consumed by the provider are verified.
-- Websocket connection/events, progress semantics, cancellation/interruption request and response, and cache behavior.
+- In-flight cancellation/interruption request and response semantics and cache-control behavior. The observed read-only WebSocket event schema is documented in `docs/COMFYUI_RENDER_PROGRESS_EVENTS.md`.
 - Output collision and numbering rules beyond the two observed successful descriptors. The provider does not depend on ComfyUI numbering for its own immutable `vNNN` folders.
 - A user-facing audio enable/disable mapping; none exists in the workflow.
 - Supported production bounds and validation policy for width, height, seconds and frame count beyond the raw `/object_info` constraints and workflow notes.
@@ -186,4 +186,4 @@ The new immutable `v001/video.mp4` and the ComfyUI source output are byte-identi
 
 A tested, read-only `ComfyUIRuntimeProbe` and workflow-contract validator enforce runtime compatibility. The development-only `ComfyUIMiniMaxH3Provider` adds one-image staging, one `/prompt` submission, history polling, safe output discovery, bundled-ffprobe verification, and immutable local render versioning. All ComfyUI connections are loopback HTTP. Neither component exposes the graph in the frontend or manages/bundles the runtime.
 
-Do not infer additional workflow controls from this success. H3 Director owns the verified ordered queue, immutable per-scene versions, dependency resolution, and stop-after-current behavior outside the graph. Stop does not interrupt an already submitted ComfyUI prompt. Websocket percentage progress, in-flight prompt cancellation, lifecycle ownership, restart recovery, cache controls, and timeline orchestration remain outside this milestone. Continuity only selects an immutable ffmpeg-extracted previous-scene frame for the already documented input-image field.
+Do not infer additional workflow controls from this success. H3 Director owns the verified ordered queue, immutable per-scene versions, dependency resolution, and stop-after-current behavior outside the graph. Stop does not interrupt an already submitted ComfyUI prompt. Only the verified sampler `value`/`max` event is displayed as a percentage; other verified events map to phase labels without fabricated progress. In-flight prompt cancellation, lifecycle ownership, restart recovery, cache controls, and timeline orchestration remain outside this milestone. Continuity only selects an immutable ffmpeg-extracted previous-scene frame for the already documented input-image field.

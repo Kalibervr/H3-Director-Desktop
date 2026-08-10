@@ -231,7 +231,7 @@ class ComfyUIMiniMaxH3Handler:
         project_id: str,
         scene_id: str,
         request: H3ProjectRenderRequest,
-        sequence_status_callback: Callable[[str], None] | None = None,
+        sequence_status_callback: Callable[[str, int | None, int | None, str | None], None] | None = None,
     ) -> H3Project:
         try:
             project = self._project_store.get_project(project_id)
@@ -246,12 +246,29 @@ class ComfyUIMiniMaxH3Handler:
             provider = self._provider_factory(paths)
             self._project_store.set_scene_status(project_id, scene_id, "queued", error=None)
 
-            def report(status: str, prompt_id: str | None) -> None:
+            def report(
+                phase: str,
+                prompt_id: str | None,
+                progress_value: int | None,
+                progress_max: int | None,
+                diagnostics: str | None,
+            ) -> None:
+                status = {
+                    "Preparing": "preparing",
+                    "Submitted": "submitted",
+                    "Preparing generation": "rendering",
+                    "Sampling": "rendering",
+                    "Decoding": "rendering",
+                    "Encoding": "encoding",
+                    "Verifying": "verifying",
+                }.get(phase, "rendering")
                 self._project_store.set_scene_status(
-                    project_id, scene_id, status, prompt_id=prompt_id, error=None
+                    project_id, scene_id, status, prompt_id=prompt_id, error=None,
+                    phase=phase, progress_value=progress_value, progress_max=progress_max,
+                    diagnostics=diagnostics,
                 )
                 if sequence_status_callback:
-                    sequence_status_callback(status)
+                    sequence_status_callback(phase, progress_value, progress_max, diagnostics)
 
             result = provider.render(
                 base_url=request.base_url,
@@ -295,7 +312,9 @@ class ComfyUIMiniMaxH3Handler:
             safe_error = str(exc) if isinstance(exc, (ProviderError, ProjectStoreError, ContinuityError)) else "The verified render metadata could not be persisted."
             try:
                 self._project_store.set_scene_status(
-                    project_id, scene_id, "failed", error=safe_error
+                    project_id, scene_id, "failed", error=safe_error,
+                    phase="Failed",
+                    diagnostics=exc.diagnostics if isinstance(exc, ProviderError) else None,
                 )
             except ProjectStoreError:
                 pass
@@ -306,7 +325,7 @@ class ComfyUIMiniMaxH3Handler:
         project_id: str,
         scene_id: str,
         request: H3ProjectRenderRequest,
-        status_callback: Callable[[str], None],
+        status_callback: Callable[[str, int | None, int | None, str | None], None],
     ) -> H3Project:
         return self.render_project_scene(project_id, scene_id, request, status_callback)
 

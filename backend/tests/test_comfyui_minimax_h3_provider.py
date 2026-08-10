@@ -17,6 +17,7 @@ from services.comfyui_minimax_h3_provider import (
     create_immutable_render_version,
     discover_output,
     load_verified_workflow,
+    parse_comfyui_progress_event,
     probe_video,
 )
 
@@ -176,3 +177,46 @@ def test_ffprobe_errors_do_not_expose_private_paths(tmp_path: Path) -> None:
         probe_video(tmp_path / "missing-ffprobe.exe", private)
     assert "secret.mp4" not in str(caught.value)
     assert str(tmp_path) not in str(caught.value)
+
+
+def test_maps_only_verified_websocket_progress_events() -> None:
+    prompt_id = "prompt-1"
+    progress = parse_comfyui_progress_event(json.dumps({
+        "type": "progress", "data": {"value": 7, "max": 20, "prompt_id": prompt_id, "node": "105:14"},
+    }), prompt_id)
+    assert progress is not None
+    assert (progress.phase, progress.value, progress.maximum) == ("Sampling", 7, 20)
+    assert parse_comfyui_progress_event(json.dumps({
+        "type": "progress", "data": {"value": 7, "max": 20, "prompt_id": prompt_id, "node": "unverified"},
+    }), prompt_id) is None
+    assert parse_comfyui_progress_event(json.dumps({
+        "type": "progress", "data": {"value": 7, "max": 20, "prompt_id": "another", "node": "105:14"},
+    }), prompt_id) is None
+
+
+@pytest.mark.parametrize(("node", "phase"), [
+    ("105:104", "Preparing generation"), ("105:14", "Sampling"),
+    ("105:23", "Decoding"), ("105:91", "Encoding"), ("92", "Encoding"),
+])
+def test_maps_verified_executing_nodes_to_truthful_phases(node: str, phase: str) -> None:
+    update = parse_comfyui_progress_event(json.dumps({
+        "type": "executing", "data": {"node": node, "display_node": node, "prompt_id": "prompt-1"},
+    }), "prompt-1")
+    assert update is not None and update.phase == phase
+    assert update.value is None and update.maximum is None
+
+
+def test_execution_error_diagnostics_are_allowlisted_and_sanitized() -> None:
+    update = parse_comfyui_progress_event(json.dumps({
+        "type": "execution_error",
+        "data": {
+            "prompt_id": "prompt-1", "node_type": "LoadImage",
+            "exception_type": "PIL.UnidentifiedImageError",
+            "exception_message": "C:\\Users\\private\\secret.png token=secret",
+            "traceback": ["private traceback"],
+        },
+    }), "prompt-1")
+    assert update is not None
+    assert update.terminal == "error"
+    assert update.diagnostics == "LoadImage · PIL.UnidentifiedImageError"
+    assert "private" not in update.diagnostics

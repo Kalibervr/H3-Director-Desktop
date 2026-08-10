@@ -64,7 +64,7 @@ def test_project_survives_store_restart_and_autosaved_scene_settings(tmp_path: P
     assert reopened.scenes[0].prompt == "A real saved prompt"
     assert reopened.scenes[0].reference_image == "C:\\local\\reference.jpg"
     assert reopened.scenes[0].seed == 123
-    assert reopened.schema_version == 4
+    assert reopened.schema_version == 5
     assert reopened.scenes[0].storage_name == "scene_001"
 
 
@@ -117,10 +117,10 @@ def test_schema_one_project_migrates_atomically_without_data_loss(tmp_path: Path
 
     reopened = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
     migrated = json.loads(metadata.read_text(encoding="utf-8"))
-    assert reopened.schema_version == 4
+    assert reopened.schema_version == 5
     assert reopened.scenes[0].id == project.scenes[0].id
     assert reopened.scenes[0].storage_name == "scene_001"
-    assert migrated["schema_version"] == 4
+    assert migrated["schema_version"] == 5
     assert list(Path(project.project_root).glob(".project.json.*.tmp")) == []
 
 

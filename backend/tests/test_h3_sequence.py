@@ -49,9 +49,9 @@ def test_render_from_here_uses_current_order_and_creates_new_versions(tmp_path: 
     def render(project_id, scene_id, request, report):
         del request
         order.append(scene_id)
-        report("preparing")
-        report("rendering")
-        report("verifying")
+        report("Preparing", None, None, None)
+        report("Sampling", 10, 20, None)
+        report("Verifying", None, None, None)
         current = store.get_project(project_id)
         scene = next(item for item in current.scenes if item.id == scene_id)
         number = len(scene.render_versions) + 1
@@ -114,7 +114,7 @@ def test_stop_is_after_current_and_remaining_items_are_cancelled(tmp_path: Path)
         current = store.get_project(project_id)
         scene = next(item for item in current.scenes if item.id == scene_id)
         store.add_render_version(project_id, scene_id, _version(Path(current.project_root), scene.storage_name, 1, "prompt-current"))
-        report("verifying")
+        report("Verifying", None, None, None)
 
     coordinator = H3SequenceCoordinator(store, render)
     run = coordinator.start(project.id, H3ProjectRenderRequest(), kind="all", start_scene_id=None)
