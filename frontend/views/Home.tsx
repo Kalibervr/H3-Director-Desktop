@@ -4,7 +4,11 @@ import {
   ChevronLeft, ChevronRight, Loader2, Plus, RotateCcw, Sparkles, Square,
 } from 'lucide-react'
 import { SceneStoryboard } from '../components/SceneStoryboard'
+import { useProjects } from '../contexts/ProjectContext'
+import { useView } from '../contexts/ViewContext'
 import { pathToFileUrl } from '../lib/file-url'
+import { buildH3EditorProject, getH3EditorUpdates, h3EditorProjectId, replaceH3EditorVersions } from '../lib/h3-editor-bridge'
+import { readProject, readProjectIds, writeProject, writeProjectIds } from '../lib/project-storage'
 import { getH3RuntimeStatus, type ComfyUIStatus } from '../lib/h3-generation'
 import {
   createH3Project,
@@ -50,6 +54,8 @@ function selectedScene(project: H3Project | null): H3Scene | null {
 }
 
 export function Home() {
+  const editorProjects = useProjects()
+  const { openProject } = useView()
   const [projects, setProjects] = useState<H3Project[]>([])
   const [project, setProject] = useState<H3Project | null>(null)
   const [newProjectName, setNewProjectName] = useState('')
@@ -72,6 +78,21 @@ export function Home() {
   const activeRun = project?.render_runs.find(run => run.status === 'running') ?? null
   const latestRun = activeRun ?? project?.render_runs.at(-1) ?? null
   const viewedRun = project?.render_runs.find(run => run.id === selectedRunId) ?? latestRun
+  const existingEditorProject = project ? readProject(h3EditorProjectId(project.id)) : null
+  const editorUpdates = project && existingEditorProject ? getH3EditorUpdates(project, existingEditorProject) : []
+
+  const openInEditor = (replaceVersions = false) => {
+    if (!project) return
+    const editorProjectId = h3EditorProjectId(project.id)
+    const existing = readProject(editorProjectId)
+    const editorProject = existing
+      ? replaceVersions ? replaceH3EditorVersions(project, existing) : existing
+      : buildH3EditorProject(project)
+    writeProject(editorProjectId, editorProject)
+    writeProjectIds([editorProjectId, ...readProjectIds().filter(id => id !== editorProjectId)])
+    editorProjects.reloadProjectIds()
+    openProject(editorProjectId, 'video-editor')
+  }
 
   const replaceProject = (next: H3Project) => {
     setProject(next)
@@ -326,7 +347,7 @@ export function Home() {
         <header className="mb-5 flex items-center justify-between"><div>
           <div className="text-xs uppercase tracking-[0.2em] text-zinc-600">Current production · {saveState}</div>
           <input value={project?.name ?? ''} disabled={!project} onChange={event => project && setProject({ ...project, name: event.target.value })} onBlur={() => project?.name.trim() && void renameH3Project(project.id, project.name).then(replaceProject).catch(() => setSaveState('error'))} className="mt-1 w-96 bg-transparent text-xl font-semibold outline-none disabled:opacity-50" placeholder="No project selected" />
-        </div><div className="text-right"><StatusPill status={runtimeStatus} />{runtimeVersion && <div className="mt-1 text-[10px] text-zinc-600">ComfyUI {runtimeVersion}</div>}</div></header>
+        </div><div className="flex items-center gap-3"><button onClick={() => openInEditor(false)} disabled={!project || !project.scenes.some(item => item.selected_render_version_id)} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-medium text-zinc-300 disabled:opacity-30"><Film className="mr-2 inline h-3.5 w-3.5" />Open in Editor</button>{editorUpdates.length > 0 && <button onClick={() => openInEditor(true)} className="rounded-lg border border-amber-300/30 px-3 py-2 text-xs text-amber-200">Update {editorUpdates.length} selected version{editorUpdates.length === 1 ? '' : 's'}</button>}<div className="text-right"><StatusPill status={runtimeStatus} />{runtimeVersion && <div className="mt-1 text-[10px] text-zinc-600">ComfyUI {runtimeVersion}</div>}</div></div></header>
         <section className="relative flex h-[calc(100%-64px)] min-h-[360px] items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl">
           {previewUrl ? activeVersion ? <video key={previewUrl} src={previewUrl} controls autoPlay loop className="h-full w-full object-contain" /> : <img src={previewUrl} alt="Selected scene reference" className="h-full w-full object-contain opacity-90" /> : <div className="max-w-sm text-center"><Film className="mx-auto h-10 w-10 text-zinc-700" /><h2 className="mt-5 text-lg text-zinc-300">Your selected render will appear here</h2><p className="mt-2 text-sm text-zinc-600">Create a project and save the scene reference to begin.</p></div>}
           <div className="absolute left-4 top-4 rounded-full border border-white/10 bg-black/60 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-zinc-400">Scene preview</div>

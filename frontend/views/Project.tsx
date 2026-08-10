@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ArrowLeft, Sparkles, Film } from 'lucide-react'
+import { Aperture, ArrowLeft, Sparkles, Film } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { useView } from '../contexts/ViewContext'
-import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
 import { GenSpace } from './GenSpace'
 import { VideoEditor } from './VideoEditor'
@@ -28,6 +27,7 @@ export function Project() {
   const [assetMetadataMigrationProgress, setAssetMetadataMigrationProgress] = useState({ running: false, total: 0, completed: 0 })
   const [upgradePassProjectId, setUpgradePassProjectId] = useState<string | null>(null)
   const activeProjectId = activeProject?.id ?? null
+  const isH3Assembly = Boolean(activeProject?.h3SourceProjectId)
   const activeProjectAssets = activeProject?.assets ?? null
   const needsAssetMetadataMigration = activeProjectAssets
     ? hasVisualAssetMetadataForMigration(activeProjectAssets)
@@ -91,7 +91,9 @@ export function Project() {
     )
   }
   
-  const tabs: { id: ProjectTab; label: string; icon: React.ReactNode }[] = [
+  const tabs: { id: ProjectTab; label: string; icon: React.ReactNode }[] = isH3Assembly ? [
+    { id: 'video-editor', label: 'Video Editor', icon: <Film className="h-4 w-4" /> },
+  ] : [
     { id: 'gen-space', label: 'Gen Space', icon: <Sparkles className="h-4 w-4" /> },
     { id: 'video-editor', label: 'Video Editor', icon: <Film className="h-4 w-4" /> },
   ]
@@ -133,7 +135,7 @@ export function Project() {
             <ArrowLeft className="h-5 w-5 text-zinc-400" />
           </button>
           
-          <LtxLogo className="h-5 w-auto text-white" />
+          {isH3Assembly ? <div className="flex items-center gap-2 text-white"><Aperture className="h-5 w-5 text-amber-300" /><span className="text-sm font-semibold">H3 Director Desktop</span></div> : <span className="text-sm font-semibold text-white">H3 Director Desktop</span>}
           
           {/* Project name */}
           <span className="text-white font-medium">{activeProject.name}</span>
@@ -162,7 +164,7 @@ export function Project() {
       </header>
       
       <main className="flex-1 overflow-hidden relative">
-        {currentTab === 'gen-space' ? (
+        {currentTab === 'gen-space' && !isH3Assembly ? (
           <GenSpace />
         ) : (
           <VideoEditor

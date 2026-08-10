@@ -106,6 +106,7 @@ interface GapGenerationApi {
 }
 
 export interface VideoEditorTimelineEditingPanelProps {
+  generationToolsEnabled?: boolean
   currentProjectId: string | null
   playbackTimeRef: React.MutableRefObject<number>
   centerOnPlayheadRef: React.MutableRefObject<boolean>
@@ -144,6 +145,7 @@ export interface VideoEditorTimelineEditingPanelProps {
 
 export function VideoEditorTimelineEditingPanel(props: VideoEditorTimelineEditingPanelProps) {
   const {
+    generationToolsEnabled = true,
     currentProjectId,
     playbackTimeRef,
     centerOnPlayheadRef,
@@ -3267,7 +3269,7 @@ export function VideoEditorTimelineEditingPanel(props: VideoEditorTimelineEditin
           onCreateVideoFromAudio={onCreateVideoFromAudio}
         />
       )}
-      {selectedGap && tracks[selectedGap.trackIndex]?.kind !== 'audio' && (
+      {generationToolsEnabled && selectedGap && tracks[selectedGap.trackIndex]?.kind !== 'audio' && (
         <GapGenerationModal
           selectedGap={selectedGap}
           anchorPosition={selectedGapAnchor}

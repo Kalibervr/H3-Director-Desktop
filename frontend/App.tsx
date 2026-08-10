@@ -1,13 +1,18 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle, Loader2 } from 'lucide-react'
 import { ProjectProvider } from './contexts/ProjectContext'
+import { ViewProvider, useView } from './contexts/ViewContext'
+import { AppSettingsProvider } from './contexts/AppSettingsContext'
+import { KeyboardShortcutsProvider } from './contexts/KeyboardShortcutsContext'
 import { Home } from './views/Home'
+import { Project } from './views/Project'
 import { PythonSetup } from './components/PythonSetup'
 import { useBackend } from './hooks/use-backend'
 import { logger } from './lib/logger'
 
 function AppContent() {
   const { connected, processStatus, isLoading } = useBackend()
+  const { currentView } = useView()
   const [pythonReady, setPythonReady] = useState<boolean | null>(null)
   const [backendStarted, setBackendStarted] = useState(false)
 
@@ -53,13 +58,13 @@ function AppContent() {
     )
   }
 
-  return <Home />
+  return currentView === 'project' ? <Project /> : <Home />
 }
 
 export default function App() {
   return (
     <ProjectProvider>
-      <AppContent />
+      <AppSettingsProvider><KeyboardShortcutsProvider><ViewProvider><AppContent /></ViewProvider></KeyboardShortcutsProvider></AppSettingsProvider>
     </ProjectProvider>
   )
 }

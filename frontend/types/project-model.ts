@@ -289,6 +289,13 @@ export const assetSchema = z.object({
   takes: z.array(assetTakeSchema).optional(),
   activeTakeIndex: z.number().optional(),
   colorLabel: z.string().optional(),
+  h3Source: z.object({
+    projectId: z.string(),
+    sceneId: z.string(),
+    renderVersionId: z.string(),
+    outputSha256: z.string(),
+    metadataFile: z.string(),
+  }).optional(),
 })
 
 export const timelineClipSchema = z.object({
@@ -342,6 +349,8 @@ export const projectV2Schema = z.object({
   assets: z.array(assetSchema),
   timelines: z.array(timelineSchema),
   activeTimelineId: z.string().optional(),
+  h3SourceProjectId: z.string().optional(),
+  h3SourceProjectRoot: z.string().optional(),
 })
 
 const assetV1Schema = assetSchema

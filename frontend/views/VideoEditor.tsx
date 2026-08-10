@@ -118,6 +118,7 @@ function VideoEditorWithStore({
   currentProject,
   saveProject,
 }: VideoEditorWithStoreProps) {
+  const generationToolsEnabled = !currentProject.h3SourceProjectId
   const { 
     setCurrentTab, setGenSpaceEditImagePath, setGenSpaceEditMode, setGenSpaceAudioPath,
     setGenSpaceRetakeSource,
@@ -873,11 +874,12 @@ function VideoEditorWithStore({
         >
         <div className="h-full min-h-0" onMouseDown={handleActivateTimelinePanelFocus}>
           <VideoEditorTimelineEditingPanel
+            generationToolsEnabled={generationToolsEnabled}
             currentProjectId={currentProjectId}
             playbackTimeRef={playbackTimeRef}
             centerOnPlayheadRef={centerOnPlayheadRef}
             getMinZoom={getMinZoom}
-            canUseIcLora={canUseIcLora}
+            canUseIcLora={generationToolsEnabled && canUseIcLora}
             handleICLoraClip={handleICLoraClip}
             kbLayout={kbLayout}
             handleExportTimelineXml={handleExportTimelineXml}

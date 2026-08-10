@@ -52,7 +52,7 @@ export function registerExportHandlers(): void {
         fs.writeFileSync(filterFile, filterScript, 'utf8')
 
         const r = await runFfmpeg(ffmpegPath, [
-          '-y', ...inputs, '-filter_complex_script', filterFile,
+          '-y', ...inputs, '-/filter_complex', filterFile,
           '-map', '[outv]', '-an', '-c:v', 'libx264', '-preset', 'fast', '-crf', '16', '-pix_fmt', 'yuv420p', tmpVideo
         ])
         try { fs.unlinkSync(filterFile) } catch {}

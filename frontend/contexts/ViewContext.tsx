@@ -11,7 +11,7 @@ import { useProjects } from './ProjectContext'
 interface ViewContextType {
   currentView: ViewType
   setCurrentView: (view: ViewType) => void
-  openProject: (projectId: string) => void
+  openProject: (projectId: string, tab?: 'gen-space' | 'video-editor') => void
   goHome: () => void
 }
 
@@ -26,9 +26,9 @@ export function ViewProvider({ children }: { children: React.ReactNode }) {
   } = useProjects()
   const [currentView, setCurrentView] = useState<ViewType>('home')
 
-  const openProject = useCallback((projectId: string) => {
+  const openProject = useCallback((projectId: string, tab: 'gen-space' | 'video-editor' = 'gen-space') => {
     activateProject(projectId)
-    setCurrentTab('gen-space')
+    setCurrentTab(tab)
     setCurrentView('project')
   }, [activateProject, setCurrentTab])
 

@@ -1,8 +1,8 @@
 import { migrateProjectData, projectSchema, type Project } from '../types/project-model'
 import { logger } from './logger'
 
-export const PROJECT_IDS_STORAGE_KEY = 'ltx-project-ids'
-export const PROJECT_STORAGE_KEY_PREFIX = 'ltx-project-'
+export const PROJECT_IDS_STORAGE_KEY = 'h3-editor-project-ids'
+export const PROJECT_STORAGE_KEY_PREFIX = 'h3-editor-project-'
 
 export function getProjectStorageKey(projectId: string): string {
   return `${PROJECT_STORAGE_KEY_PREFIX}${projectId}`
@@ -56,10 +56,17 @@ export function readProject(projectId: string): Project | null {
 
 export function writeProject(projectId: string, project: Project): Project {
   const normalizedProject = projectSchema.parse({ ...project, id: projectId })
+  const serialized = JSON.stringify(normalizedProject)
   localStorage.setItem(
     getProjectStorageKey(projectId),
-    JSON.stringify(normalizedProject),
+    serialized,
   )
+  if (normalizedProject.h3SourceProjectRoot && typeof window !== 'undefined' && window.electronAPI) {
+    const separator = normalizedProject.h3SourceProjectRoot.includes('\\') ? '\\' : '/'
+    const mirrorPath = `${normalizedProject.h3SourceProjectRoot}${separator}editor-project.json`
+    void window.electronAPI.saveFile({ filePath: mirrorPath, data: JSON.stringify(normalizedProject, null, 2) })
+      .catch(error => logger.error(`Failed to mirror H3 editor project: ${String(error)}`))
+  }
   return normalizedProject
 }
 

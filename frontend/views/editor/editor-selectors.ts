@@ -692,17 +692,18 @@ export function selectClipMetadata(state: EditorState, clip: TimelineClip): Clip
 
 export function selectClipCapabilities(state: EditorState, clip: TimelineClip): ClipCapabilities {
   const liveAsset = selectLiveAssetForClip(state, clip)
+  const isH3Source = Boolean(liveAsset?.h3Source)
   return {
     isVideo: clip.type === 'video',
     isImage: clip.type === 'image',
     isAudio: clip.type === 'audio',
     isAdjustment: clip.type === 'adjustment',
     isText: clip.type === 'text',
-    canCreateVideoFromImage: clip.type === 'image',
-    canCreateVideoFromAudio: clip.type === 'audio' && !clip.linkedClipIds?.length,
+    canCreateVideoFromImage: !isH3Source && clip.type === 'image',
+    canCreateVideoFromAudio: !isH3Source && clip.type === 'audio' && !clip.linkedClipIds?.length,
     canRegenerate: Boolean(liveAsset?.generationParams),
-    canRetake: clip.type === 'video',
-    canUseIcLora: clip.type === 'video',
+    canRetake: !isH3Source && clip.type === 'video',
+    canUseIcLora: !isH3Source && clip.type === 'video',
   }
 }
 
