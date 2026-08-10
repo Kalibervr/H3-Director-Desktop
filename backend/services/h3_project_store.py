@@ -13,6 +13,7 @@ from api_types import (
     H3Project,
     H3ProjectSettings,
     H3ContinuityArtifact,
+    H3RenderRun,
     H3RenderVersion,
     H3Scene,
     H3SceneUpdateRequest,
@@ -57,6 +58,7 @@ def _atomic_json_write(path: Path, payload: object) -> None:
 class H3ProjectStore:
     def __init__(self, projects_root: Path) -> None:
         self.projects_root = projects_root.resolve()
+        self._recover_interrupted_runs = True
 
     def list_projects(self) -> list[H3Project]:
         if not self.projects_root.exists():
@@ -76,6 +78,7 @@ class H3ProjectStore:
                 projects.append(self._read_file(metadata))
             except ProjectStoreError:
                 continue
+        self._recover_interrupted_runs = False
         return sorted(projects, key=lambda item: item.updated_at, reverse=True)
 
     def create_project(self, name: str, scene_count: int = 1) -> H3Project:
@@ -98,7 +101,7 @@ class H3ProjectStore:
         timestamp = _now()
         scenes = [self._new_scene(number, _scene_storage_name(number)) for number in range(1, scene_count + 1)]
         project = H3Project(
-            schema_version=3,
+            schema_version=4,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
@@ -107,6 +110,7 @@ class H3ProjectStore:
             settings=H3ProjectSettings(width=640, height=640, fps=24, duration_seconds=5.0, frame_count=124),
             scenes=scenes,
             selected_scene_id=scenes[0].id,
+            render_runs=[],
         )
         self.save_project(project)
         return project
@@ -189,6 +193,7 @@ class H3ProjectStore:
 
     def reorder_scenes(self, project_id: str, scene_ids: list[str]) -> H3Project:
         project = self.get_project(project_id)
+        self._require_no_active_run(project)
         current_ids = [scene.id for scene in project.scenes]
         if len(scene_ids) != len(set(scene_ids)) or set(scene_ids) != set(current_ids):
             raise ProjectStoreError("The scene order must contain every scene exactly once.")
@@ -198,6 +203,7 @@ class H3ProjectStore:
 
     def delete_scene(self, project_id: str, scene_id: str) -> H3Project:
         project = self.get_project(project_id)
+        self._require_no_active_run(project)
         if len(project.scenes) == 1:
             raise ProjectStoreError("A project must keep at least one scene.")
         target = next((scene for scene in project.scenes if scene.id == scene_id), None)
@@ -298,6 +304,32 @@ class H3ProjectStore:
             raise ProjectStoreError("The selected scene could not be found.")
         return self.save_project(project.model_copy(update={"scenes": scenes, "selected_scene_id": scene_id}))
 
+    def add_render_run(self, project_id: str, run: H3RenderRun) -> H3Project:
+        project = self.get_project(project_id)
+        self._require_no_active_run(project)
+        if any(item.id == run.id for item in project.render_runs):
+            raise ProjectStoreError("The render run already exists.")
+        return self.save_project(project.model_copy(update={"render_runs": [*project.render_runs, run]}))
+
+    def update_render_run(self, project_id: str, run: H3RenderRun) -> H3Project:
+        project = self.get_project(project_id)
+        found = False
+        runs: list[H3RenderRun] = []
+        for existing in project.render_runs:
+            if existing.id == run.id:
+                found = True
+                runs.append(run)
+            else:
+                runs.append(existing)
+        if not found:
+            raise ProjectStoreError("The render run could not be found.")
+        return self.save_project(project.model_copy(update={"render_runs": runs}))
+
+    @staticmethod
+    def _require_no_active_run(project: H3Project) -> None:
+        if any(run.status == "running" for run in project.render_runs):
+            raise ProjectStoreError("Scene order cannot change while a render queue is active.")
+
     @staticmethod
     def _new_scene(order: int, storage_name: str, source: H3Scene | None = None) -> H3Scene:
         return H3Scene(
@@ -358,27 +390,50 @@ class H3ProjectStore:
                 pass
             raise
 
-    @staticmethod
-    def _read_file(path: Path) -> H3Project:
+    def _read_file(self, path: Path) -> H3Project:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-            migrated = payload.get("schema_version") in {1, 2}
+            original_schema = payload.get("schema_version")
+            migrated = original_schema in {1, 2, 3}
             if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
             if migrated:
-                payload["schema_version"] = 3
+                payload["schema_version"] = 4
                 for scene in payload.get("scenes", []):
                     scene.setdefault("mode", "new_shot")
                     scene.setdefault("continuity_strategy", "last_valid_frame")
                     scene.setdefault("continuity_offset_frames", 0)
                     scene.setdefault("selected_continuity_artifact_id", None)
                     scene.setdefault("continuity_artifacts", [])
+                payload.setdefault("render_runs", [])
             project = H3Project.model_validate(payload)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             raise ProjectStoreError("The local project metadata is invalid or unreadable.") from exc
         if Path(project.project_root).resolve() != path.parent.resolve():
             raise ProjectStoreError("The local project metadata has an invalid project root.")
-        if migrated:
+        interrupted = False
+        recovered_runs: list[H3RenderRun] = []
+        for run in project.render_runs:
+            if run.status != "running" or not self._recover_interrupted_runs:
+                recovered_runs.append(run)
+                continue
+            interrupted = True
+            timestamp = _now()
+            items = [item.model_copy(update={
+                "state": "cancelled" if item.state in {"waiting", "preparing", "rendering", "verifying"} else item.state,
+                "completed_at": timestamp if item.state in {"waiting", "preparing", "rendering", "verifying"} else item.completed_at,
+                "error": "Not resumed after backend restart." if item.state in {"waiting", "preparing", "rendering", "verifying"} else item.error,
+            }) for item in run.items]
+            recovered_runs.append(run.model_copy(update={
+                "status": "cancelled",
+                "completed_at": timestamp,
+                "current_scene_id": None,
+                "failure_or_cancel_reason": "The backend restarted; the in-flight queue was not resumed.",
+                "items": items,
+            }))
+        if interrupted:
+            project = project.model_copy(update={"render_runs": recovered_runs})
+        if migrated or interrupted:
             _atomic_json_write(path, project.model_dump(mode="json"))
         return project

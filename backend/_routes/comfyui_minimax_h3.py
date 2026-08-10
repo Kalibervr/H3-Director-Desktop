@@ -14,6 +14,8 @@ from api_types import (
     H3ProjectUpdateRequest,
     H3SceneUpdateRequest,
     H3SceneReorderRequest,
+    H3RenderRun,
+    H3SequenceStartRequest,
     MiniMaxH3RenderRequest,
     MiniMaxH3RenderResponse,
 )
@@ -151,3 +153,21 @@ def route_h3_scene_continuity(
     handler: AppHandler = Depends(get_state_service),
 ) -> H3ContinuityPrepareResponse:
     return handler.comfyui_minimax_h3.prepare_continuity(project_id, scene_id)
+
+
+@router.post("/projects/{project_id}/sequences", response_model=H3RenderRun)
+def route_h3_sequence_start(
+    project_id: str,
+    request: H3SequenceStartRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3RenderRun:
+    return handler.comfyui_minimax_h3.start_sequence(project_id, request)
+
+
+@router.post("/projects/{project_id}/sequences/{run_id}/stop", response_model=H3RenderRun)
+def route_h3_sequence_stop(
+    project_id: str,
+    run_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3RenderRun:
+    return handler.comfyui_minimax_h3.stop_sequence(project_id, run_id)

@@ -152,6 +152,12 @@ H3SceneStatus = Literal[
 ]
 H3SceneMode = Literal["new_shot", "continue_previous", "same_character_new_shot"]
 H3ContinuityStrategy = Literal["last_valid_frame", "offset_from_end"]
+H3SequenceKind = Literal["from_here", "all"]
+H3QueueState = Literal[
+    "waiting", "preparing", "rendering", "verifying", "complete", "failed",
+    "skipped", "cancelled",
+]
+H3SequenceStatus = Literal["running", "complete", "failed", "cancelled"]
 
 
 class H3ProjectSettings(BaseModel):
@@ -233,9 +239,36 @@ class H3Scene(BaseModel):
     active_prompt_id: str | None
 
 
+class H3SequenceItem(BaseModel):
+    model_config = ConfigDict(strict=True)
+    scene_id: str
+    scene_order: int = Field(ge=1)
+    state: H3QueueState
+    started_at: str | None = None
+    completed_at: str | None = None
+    render_version_id: str | None = None
+    prompt_id: str | None = None
+    continuity_artifact_id: str | None = None
+    error: str | None = None
+
+
+class H3RenderRun(BaseModel):
+    model_config = ConfigDict(strict=True)
+    id: str
+    kind: H3SequenceKind
+    status: H3SequenceStatus
+    started_at: str
+    completed_at: str | None = None
+    ordered_scene_ids: list[str]
+    current_scene_id: str | None = None
+    stop_after_current_requested: bool = False
+    failure_or_cancel_reason: str | None = None
+    items: list[H3SequenceItem]
+
+
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[3]
+    schema_version: Literal[4]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str
@@ -244,6 +277,7 @@ class H3Project(BaseModel):
     settings: H3ProjectSettings
     scenes: list[H3Scene]
     selected_scene_id: str
+    render_runs: list[H3RenderRun]
 
 
 class H3ProjectCreateRequest(BaseModel):
@@ -282,6 +316,13 @@ class H3SceneUpdateRequest(BaseModel):
 class H3ProjectRenderRequest(BaseModel):
     model_config = ConfigDict(strict=True)
     base_url: str = "http://127.0.0.1:8188"
+
+
+class H3SequenceStartRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+    base_url: str = "http://127.0.0.1:8188"
+    kind: H3SequenceKind
+    start_scene_id: str | None = None
 
 
 class H3SceneReorderRequest(BaseModel):

@@ -3,6 +3,32 @@ import { backendFetch } from './backend'
 export type H3SceneStatus = 'idle' | 'queued' | 'preparing' | 'submitted' | 'rendering' | 'encoding' | 'verifying' | 'complete' | 'failed' | 'cancelled'
 export type H3SceneMode = 'new_shot' | 'continue_previous' | 'same_character_new_shot'
 export type H3ContinuityStrategy = 'last_valid_frame' | 'offset_from_end'
+export type H3QueueState = 'waiting' | 'preparing' | 'rendering' | 'verifying' | 'complete' | 'failed' | 'skipped' | 'cancelled'
+
+export interface H3SequenceItem {
+  scene_id: string
+  scene_order: number
+  state: H3QueueState
+  started_at: string | null
+  completed_at: string | null
+  render_version_id: string | null
+  prompt_id: string | null
+  continuity_artifact_id: string | null
+  error: string | null
+}
+
+export interface H3RenderRun {
+  id: string
+  kind: 'from_here' | 'all'
+  status: 'running' | 'complete' | 'failed' | 'cancelled'
+  started_at: string
+  completed_at: string | null
+  ordered_scene_ids: string[]
+  current_scene_id: string | null
+  stop_after_current_requested: boolean
+  failure_or_cancel_reason: string | null
+  items: H3SequenceItem[]
+}
 
 export interface H3VideoProbe {
   codec: string
@@ -82,7 +108,7 @@ export interface H3Scene {
 }
 
 export interface H3Project {
-  schema_version: 3
+  schema_version: 4
   id: string
   name: string
   created_at: string
@@ -97,6 +123,7 @@ export interface H3Project {
   }
   scenes: H3Scene[]
   selected_scene_id: string
+  render_runs: H3RenderRun[]
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -164,4 +191,15 @@ export async function renderH3ProjectScene(projectId: string, sceneId: string): 
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/render`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base_url: 'http://127.0.0.1:8188' }),
   }))
+}
+
+export async function startH3Sequence(projectId: string, kind: 'from_here' | 'all', startSceneId?: string): Promise<H3RenderRun> {
+  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/sequences`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ base_url: 'http://127.0.0.1:8188', kind, start_scene_id: startSceneId ?? null }),
+  }))
+}
+
+export async function stopH3Sequence(projectId: string, runId: string): Promise<H3RenderRun> {
+  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/sequences/${encodeURIComponent(runId)}/stop`, { method: 'POST' }))
 }

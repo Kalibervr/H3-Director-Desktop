@@ -54,14 +54,15 @@ test('workspace exposes persistent multi-scene creation and storyboard operation
   for (const label of ['Add Scene', 'Duplicate', 'Delete', 'Move']) assert.match(storyboard, new RegExp(label, 'i'))
   for (const operation of ['selectH3Scene', 'addH3Scene', 'duplicateH3Scene', 'deleteH3Scene', 'reorderH3Scenes']) assert.match(projectClient, new RegExp(operation))
   assert.match(storyboard, /overflow-x-auto/)
-  assert.doesNotMatch(home + storyboard, /Render All|Render From Here/)
 })
 
-test('workspace exposes manual continuity without automatic sequencing claims', () => {
+test('workspace exposes manual continuity with ordered queue controls', () => {
   const home = read('frontend/views/Home.tsx')
   const projectClient = read('frontend/lib/h3-projects.ts')
   for (const label of ['Scene Mode', 'New Shot', 'Continue Previous', 'Same Character, New Shot', 'Continuity source', 'Extraction strategy', 'Offset from end', 'Extract Continuity Frame']) assert.match(home, new RegExp(label))
   assert.match(projectClient, /prepareH3Continuity/)
   assert.match(projectClient, /continuity_artifacts/)
-  assert.doesNotMatch(home, /Render All|Render From Here|automatic sequencing/i)
+  for (const label of ['Render From Here', 'Render All', 'Render queue', 'Stop after current scene']) assert.match(home, new RegExp(label))
+  for (const operation of ['startH3Sequence', 'stopH3Sequence', 'render_runs']) assert.match(projectClient, new RegExp(operation))
+  assert.doesNotMatch(home, /\d+% complete|automatic retry/i)
 })

@@ -22,6 +22,8 @@ from api_types import (
     H3Scene,
     H3SceneReorderRequest,
     H3SceneUpdateRequest,
+    H3RenderRun,
+    H3SequenceStartRequest,
     MiniMaxH3RenderRequest,
     MiniMaxH3RenderResponse,
     MiniMaxH3VideoProbeResponse,
@@ -35,6 +37,7 @@ from services.comfyui_minimax_h3_provider import (
 from services.comfyui_runtime_probe import ComfyUIRuntimeProbe
 from services.h3_project_store import H3ProjectStore, ProjectStoreError
 from services.h3_continuity import ContinuityError, H3ContinuityExtractor, previous_scene, selected_completed_version
+from services.h3_sequence import H3SequenceCoordinator
 
 
 @dataclass(frozen=True)
@@ -102,6 +105,7 @@ class ComfyUIMiniMaxH3Handler:
         self._project_store = project_store or H3ProjectStore(
             Path(local_app_data) / "H3 Director Desktop" / "Projects"
         )
+        self._sequence = H3SequenceCoordinator(self._project_store, self._render_for_sequence)
 
     def list_projects(self) -> list[H3Project]:
         return self._project_call(self._project_store.list_projects)
@@ -148,6 +152,27 @@ class ComfyUIMiniMaxH3Handler:
             return H3ContinuityPrepareResponse(project=project, artifact=artifact)
         except (ProjectStoreError, ContinuityError) as exc:
             raise HTTPError(422, str(exc), code="H3_CONTINUITY_ERROR") from exc
+
+    def start_sequence(self, project_id: str, request: H3SequenceStartRequest) -> H3RenderRun:
+        status = self.get_status(request.base_url)
+        if status.status != "connected" or not status.workflow_contract_valid:
+            message = status.errors[0] if status.errors else "The local ComfyUI runtime is unavailable or incompatible."
+            raise HTTPError(422, message, code="H3_SEQUENCE_RUNTIME_ERROR")
+        try:
+            return self._sequence.start(
+                project_id,
+                H3ProjectRenderRequest(base_url=request.base_url),
+                kind=request.kind,
+                start_scene_id=request.start_scene_id,
+            )
+        except ProjectStoreError as exc:
+            raise HTTPError(422, str(exc), code="H3_SEQUENCE_ERROR") from exc
+
+    def stop_sequence(self, project_id: str, run_id: str) -> H3RenderRun:
+        try:
+            return self._sequence.request_stop(project_id, run_id)
+        except ProjectStoreError as exc:
+            raise HTTPError(422, str(exc), code="H3_SEQUENCE_ERROR") from exc
 
     def get_status(self, base_url: str) -> ComfyUIProbeResponse:
         try:
@@ -206,6 +231,7 @@ class ComfyUIMiniMaxH3Handler:
         project_id: str,
         scene_id: str,
         request: H3ProjectRenderRequest,
+        sequence_status_callback: Callable[[str], None] | None = None,
     ) -> H3Project:
         try:
             project = self._project_store.get_project(project_id)
@@ -224,6 +250,8 @@ class ComfyUIMiniMaxH3Handler:
                 self._project_store.set_scene_status(
                     project_id, scene_id, status, prompt_id=prompt_id, error=None
                 )
+                if sequence_status_callback:
+                    sequence_status_callback(status)
 
             result = provider.render(
                 base_url=request.base_url,
@@ -272,6 +300,15 @@ class ComfyUIMiniMaxH3Handler:
             except ProjectStoreError:
                 pass
             raise HTTPError(422, safe_error, code="MINIMAX_H3_RENDER_FAILED") from exc
+
+    def _render_for_sequence(
+        self,
+        project_id: str,
+        scene_id: str,
+        request: H3ProjectRenderRequest,
+        status_callback: Callable[[str], None],
+    ) -> H3Project:
+        return self.render_project_scene(project_id, scene_id, request, status_callback)
 
     def _resolve_render_input(self, project: H3Project, scene: H3Scene) -> Path:
         if scene.mode == "same_character_new_shot":
