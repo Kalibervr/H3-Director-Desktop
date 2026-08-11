@@ -123,7 +123,7 @@ export function Project() {
   }
   
   return (
-    <div className="h-screen bg-background flex flex-col">
+    <div className="h3-editor-shell h-screen bg-background flex flex-col">
       {/* Header */}
       <header className="flex items-center px-4 py-3 border-b border-zinc-800">
         <div className="flex-1 flex items-center gap-4">

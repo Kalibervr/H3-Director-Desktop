@@ -3,6 +3,7 @@ import { backendFetch } from './backend'
 export type H3SceneStatus = 'idle' | 'queued' | 'preparing' | 'submitted' | 'rendering' | 'encoding' | 'verifying' | 'complete' | 'failed' | 'cancelled'
 export type H3SceneMode = 'new_shot' | 'continue_previous' | 'same_character_new_shot'
 export type H3ReferenceFit = 'fill_crop' | 'fit' | 'stretch'
+export type H3AudioMode = 'natural_ambience' | 'dialogue' | 'silent'
 export type H3AspectRatio = '1:1 (Square)' | '16:9 (Widescreen)' | '9:16 (Portrait Widescreen)'
 export type H3ResolutionMegapixels = 0.4 | 0.6 | 0.8 | 1
 export type H3SequenceMode = 'independent_shots' | 'continuous_sequence'
@@ -56,6 +57,11 @@ export interface H3RenderVersion {
   video_file: string
   metadata_file: string
   prompt: string
+  final_prompt: string | null
+  audio_mode: H3AudioMode
+  no_speech: boolean
+  no_music: boolean
+  custom_audio_instruction: string
   input_image_reference: string
   seed: number
   width: number
@@ -96,6 +102,10 @@ export interface H3Scene {
   order: number
   name: string
   prompt: string
+  audio_mode: H3AudioMode
+  no_speech: boolean
+  no_music: boolean
+  custom_audio_instruction: string
   reference_image: string | null
   reference_fit: H3ReferenceFit
   aspect_ratio: H3AspectRatio
@@ -123,7 +133,7 @@ export interface H3Scene {
 }
 
 export interface H3Project {
-  schema_version: 8
+  schema_version: 9
   id: string
   name: string
   created_at: string
@@ -199,7 +209,7 @@ export async function updateH3Project(projectId: string, update: Partial<Pick<H3
 
 export const renameH3Project = (projectId: string, name: string) => updateH3Project(projectId, { name })
 
-export async function updateH3Scene(projectId: string, sceneId: string, update: Partial<Pick<H3Scene, 'name' | 'prompt' | 'reference_image' | 'reference_fit' | 'aspect_ratio' | 'resolution_megapixels' | 'width' | 'height' | 'fps' | 'duration_seconds' | 'frame_count' | 'seed' | 'selected_render_version_id' | 'mode' | 'continuity_strategy' | 'continuity_offset_frames'>>): Promise<H3Project> {
+export async function updateH3Scene(projectId: string, sceneId: string, update: Partial<Pick<H3Scene, 'name' | 'prompt' | 'audio_mode' | 'no_speech' | 'no_music' | 'custom_audio_instruction' | 'reference_image' | 'reference_fit' | 'aspect_ratio' | 'resolution_megapixels' | 'width' | 'height' | 'fps' | 'duration_seconds' | 'frame_count' | 'seed' | 'selected_render_version_id' | 'mode' | 'continuity_strategy' | 'continuity_offset_frames'>>): Promise<H3Project> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(update),
   }))

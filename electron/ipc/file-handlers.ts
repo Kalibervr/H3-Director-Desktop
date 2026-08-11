@@ -87,6 +87,18 @@ function resolveLocalSourcePath(srcPath: string): string {
   return resolved
 }
 
+function validateH3ProjectPath(projectRoot: string, candidate?: string): string {
+  const projectsRoot = path.resolve(process.env.LOCALAPPDATA || '', 'H3 Director Desktop', 'Projects')
+  const root = path.resolve(projectRoot)
+  const target = path.resolve(candidate || projectRoot)
+  const relativeRoot = path.relative(projectsRoot, root)
+  const relativeTarget = path.relative(root, target)
+  if (!projectsRoot || relativeRoot.startsWith('..') || path.isAbsolute(relativeRoot) || relativeTarget.startsWith('..') || path.isAbsolute(relativeTarget)) {
+    throw new Error('Only H3 Director-managed project files may be accessed.')
+  }
+  return target
+}
+
 function getUniqueDestinationPath(destDir: string, fileName: string): string {
   const parsed = path.parse(fileName)
   let candidate = path.join(destDir, fileName)
@@ -220,6 +232,38 @@ export function registerFileHandlers(): void {
   handle('showItemInFolder', async ({ filePath }) => {
     const { shell } = await import('electron')
     shell.showItemInFolder(filePath)
+  })
+
+  handle('saveH3RenderCopy', async ({ projectRoot, videoFile, defaultName }) => {
+    const source = validateH3ProjectPath(projectRoot, videoFile)
+    if (path.extname(source).toLowerCase() !== '.mp4' || !fs.existsSync(source) || !fs.statSync(source).isFile()) {
+      throw new Error('The selected H3 render is unavailable.')
+    }
+    const mainWindow = getMainWindow()
+    if (!mainWindow) return { success: false, error: 'The application window is unavailable.' }
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Save H3 render copy', defaultPath: defaultName, filters: [{ name: 'MP4 video', extensions: ['mp4'] }],
+    })
+    if (result.canceled || !result.filePath) return { success: false, error: 'Save copy cancelled.' }
+    if (fs.existsSync(result.filePath)) return { success: false, error: 'That file already exists. Choose another name.' }
+    fs.copyFileSync(source, result.filePath, fs.constants.COPYFILE_EXCL)
+    return { success: true, path: result.filePath }
+  })
+
+  handle('revealH3Render', async ({ projectRoot, videoFile }) => {
+    const source = validateH3ProjectPath(projectRoot, videoFile)
+    if (!fs.existsSync(source) || !fs.statSync(source).isFile()) return { success: false, error: 'The selected H3 render is unavailable.' }
+    const { shell } = await import('electron')
+    shell.showItemInFolder(source)
+    return { success: true, path: source }
+  })
+
+  handle('openH3ProjectFolder', async ({ projectRoot }) => {
+    const root = validateH3ProjectPath(projectRoot)
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return { success: false, error: 'The H3 project folder is unavailable.' }
+    const { shell } = await import('electron')
+    const error = await shell.openPath(root)
+    return error ? { success: false, error } : { success: true, path: root }
   })
 
   handle('readLocalFile', async ({ filePath }) => {

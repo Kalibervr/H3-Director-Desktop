@@ -31,6 +31,7 @@ from api_types import (
 from services.comfyui_minimax_h3_provider import (
     ComfyUIMiniMaxH3Provider,
     ProviderError,
+    RenderCancelled,
     SingleSceneRequest,
     load_verified_workflow,
 )
@@ -38,6 +39,7 @@ from services.comfyui_runtime_probe import ComfyUIRuntimeProbe
 from services.h3_project_store import H3ProjectStore, ProjectStoreError
 from services.h3_continuity import ContinuityError, H3ContinuityExtractor, previous_scene, selected_completed_version
 from services.h3_sequence import H3SequenceCoordinator
+from services.h3_audio_guidance import H3AudioGuidance, compose_h3_prompt
 
 
 @dataclass(frozen=True)
@@ -237,6 +239,7 @@ class ComfyUIMiniMaxH3Handler:
         scene_id: str,
         request: H3ProjectRenderRequest,
         sequence_status_callback: Callable[[str, int | None, int | None, str | None], None] | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> H3Project:
         try:
             project = self._project_store.get_project(project_id)
@@ -246,6 +249,12 @@ class ComfyUIMiniMaxH3Handler:
             if not scene.prompt.strip():
                 raise ProjectStoreError("The scene requires a prompt before rendering.")
             input_image = self._resolve_render_input(project, scene)
+            final_prompt = compose_h3_prompt(scene.prompt, H3AudioGuidance(
+                mode=scene.audio_mode,
+                no_speech=scene.no_speech,
+                no_music=scene.no_music,
+                custom_instruction=scene.custom_audio_instruction,
+            ))
             scene_root = Path(project.project_root) / "scenes" / scene.storage_name
             paths = resolve_h3_runtime_paths(scene_root / "renders")
             provider = self._provider_factory(paths)
@@ -278,7 +287,8 @@ class ComfyUIMiniMaxH3Handler:
             result = provider.render(
                 base_url=request.base_url,
                 request=SingleSceneRequest(
-                    prompt=scene.prompt,
+                    prompt=final_prompt,
+                    original_prompt=scene.prompt,
                     input_image=input_image,
                     seed=scene.seed,
                     width=scene.width,
@@ -289,8 +299,14 @@ class ComfyUIMiniMaxH3Handler:
                     aspect_ratio=scene.aspect_ratio,
                     resolution_megapixels=scene.resolution_megapixels,
                     output_filename_prefix=f"scene_{scene.order:03d}",
+                    managed_filename_prefix=f"Scene{scene.order:02d}",
+                    audio_mode=scene.audio_mode,
+                    no_speech=scene.no_speech,
+                    no_music=scene.no_music,
+                    custom_audio_instruction=scene.custom_audio_instruction,
                 ),
                 status_callback=report,
+                cancel_requested=cancel_requested,
             )
             metadata_payload = json.loads(result.metadata_file.read_text(encoding="utf-8"))
             version_number = int(result.render_directory.name.removeprefix("v"))
@@ -302,6 +318,11 @@ class ComfyUIMiniMaxH3Handler:
                 video_file=str(result.output_file),
                 metadata_file=str(result.metadata_file),
                 prompt=scene.prompt,
+                final_prompt=final_prompt,
+                audio_mode=scene.audio_mode,
+                no_speech=scene.no_speech,
+                no_music=scene.no_music,
+                custom_audio_instruction=scene.custom_audio_instruction,
                 input_image_reference=str(input_image),
                 seed=scene.seed,
                 width=scene.width,
@@ -316,6 +337,9 @@ class ComfyUIMiniMaxH3Handler:
                 ffprobe=MiniMaxH3VideoProbeResponse(**result.video.__dict__),
             )
             return self._project_store.add_render_version(project_id, scene_id, version)
+        except RenderCancelled:
+            self._project_store.set_scene_status(project_id, scene_id, "cancelled", error=None, phase="Cancelled")
+            raise
         except (ProviderError, ProjectStoreError, ContinuityError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
             safe_error = str(exc) if isinstance(exc, (ProviderError, ProjectStoreError, ContinuityError)) else "The verified render metadata could not be persisted."
             try:
@@ -334,8 +358,9 @@ class ComfyUIMiniMaxH3Handler:
         scene_id: str,
         request: H3ProjectRenderRequest,
         status_callback: Callable[[str, int | None, int | None, str | None], None],
+        cancel_requested: Callable[[], bool],
     ) -> H3Project:
-        return self.render_project_scene(project_id, scene_id, request, status_callback)
+        return self.render_project_scene(project_id, scene_id, request, status_callback, cancel_requested)
 
     def _resolve_render_input(self, project: H3Project, scene: H3Scene) -> Path:
         if scene.mode == "same_character_new_shot":

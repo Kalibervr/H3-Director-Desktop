@@ -40,16 +40,16 @@ win:
     - target: nsis
       arch:
         - x64
-  icon: resources/icon.ico
+  icon: resources/h3d-icon.ico
   artifactName: ${productName}-Setup.${ext}
 
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   include: resources/installer.nsh
-  installerIcon: resources/icon.ico
-  uninstallerIcon: resources/icon.ico
-  installerHeaderIcon: resources/icon.ico
+  installerIcon: resources/h3d-icon.ico
+  uninstallerIcon: resources/h3d-icon.ico
+  installerHeaderIcon: resources/h3d-icon.ico
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: H3 Director Desktop
@@ -85,7 +85,7 @@ mac:
     - target: zip
       arch:
         - arm64
-  icon: resources/icon.icns
+  icon: resources/h3d-icon.icns
   category: public.app-category.video
   artifactName: ${productName}-${arch}.${ext}
 

@@ -206,6 +206,23 @@ def test_creates_collision_safe_immutable_versions(tmp_path: Path) -> None:
     assert list(first[0].glob(".metadata.*.tmp")) == []
 
 
+def test_project_managed_render_names_and_metadata_keep_original_prompt(tmp_path: Path) -> None:
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"render")
+    image = _image(tmp_path / "input.png")
+    request = _request(image, prompt="Original. No music.", original_prompt="Original.", managed_filename_prefix="Scene02", audio_mode="natural_ambience", no_music=True)
+    version, output, metadata = create_immutable_render_version(tmp_path / "project" / "scenes" / "scene_002" / "renders", source, "prompt-1", request, VideoProbe("h264", 640, 640, "24/1", 5.167, 124, True))
+    payload = json.loads(metadata.read_text(encoding="utf-8"))
+    assert version.name == "v001"
+    assert output.name == "Scene02_v001.mp4"
+    assert metadata.name == "render-metadata.json"
+    assert source.read_bytes() == output.read_bytes()
+    assert payload["original_user_prompt"] == "Original."
+    assert payload["final_composed_prompt"] == "Original. No music."
+    assert payload["audio_guidance"]["no_music"] is True
+    assert payload["staged_input_dimensions"] == {"width": 640, "height": 640}
+
+
 @pytest.mark.skipif(not FFPROBE_PATH.is_file(), reason="verified bundled ffprobe is unavailable")
 def test_bundled_ffprobe_verifies_evidence_mp4() -> None:
     result = probe_video(FFPROBE_PATH, EVIDENCE_MP4)

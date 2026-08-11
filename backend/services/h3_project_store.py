@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,7 +48,17 @@ def _atomic_json_write(path: Path, payload: object) -> None:
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
+        # Windows can transiently hold project.json during a concurrent UI refresh.
+        # The temporary file is complete and fsynced, so retrying the final atomic
+        # replacement preserves the no-partial-write guarantee.
+        for attempt in range(6):
+            try:
+                os.replace(temporary, path)
+                break
+            except PermissionError:
+                if attempt == 5:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
     except (OSError, TypeError, ValueError) as exc:
         try:
             temporary.unlink(missing_ok=True)
@@ -87,7 +98,10 @@ class H3ProjectStore:
         if not cleaned_name:
             raise ProjectStoreError("A project name is required.")
         project_id = uuid.uuid4().hex
-        root = self.projects_root / f"{_safe_slug(cleaned_name)}_{project_id[:8]}"
+        # The display name is deliberately not used as immutable identity: renaming a
+        # project never moves its existing scenes or render references.
+        creation_date = datetime.now(UTC).date().isoformat()
+        root = self.projects_root / f"{creation_date} - {_safe_slug(cleaned_name)} [{project_id[:8]}]"
         if scene_count < 1 or scene_count > 999:
             raise ProjectStoreError("The scene count must be between 1 and 999.")
         try:
@@ -104,7 +118,7 @@ class H3ProjectStore:
         if sequence_mode == "continuous_sequence":
             scenes = [scene.model_copy(update={"mode": "new_shot" if scene.order == 1 else "continue_previous"}) for scene in scenes]
         project = H3Project(
-            schema_version=8,
+            schema_version=9,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
@@ -373,6 +387,10 @@ class H3ProjectStore:
             order=order,
             name=f"{source.name} Copy" if source else f"Scene {order:02d}",
             prompt=source.prompt if source else "",
+            audio_mode=source.audio_mode if source else "natural_ambience",
+            no_speech=source.no_speech if source else False,
+            no_music=source.no_music if source else False,
+            custom_audio_instruction=source.custom_audio_instruction if source else "",
             reference_image=source.reference_image if source else None,
             reference_fit=source.reference_fit if source else "fill_crop",
             aspect_ratio=source.aspect_ratio if source else "1:1 (Square)",
@@ -436,16 +454,20 @@ class H3ProjectStore:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             original_schema = payload.get("schema_version")
-            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7}
+            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8}
             if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
             if migrated:
-                payload["schema_version"] = 8
+                payload["schema_version"] = 9
                 payload.setdefault("sequence_mode", "independent_shots")
                 for scene in payload.get("scenes", []):
                     scene.setdefault("mode", "new_shot")
                     scene.setdefault("reference_fit", "fill_crop")
+                    scene.setdefault("audio_mode", "natural_ambience")
+                    scene.setdefault("no_speech", False)
+                    scene.setdefault("no_music", False)
+                    scene.setdefault("custom_audio_instruction", "")
                     scene.setdefault("aspect_ratio", "1:1 (Square)")
                     scene.setdefault("resolution_megapixels", 0.4)
                     scene.setdefault("continuity_strategy", "last_valid_frame")
@@ -457,6 +479,13 @@ class H3ProjectStore:
                     scene.setdefault("progress_max", None)
                     scene.setdefault("diagnostics", None)
                 payload.setdefault("render_runs", [])
+                for scene in payload.get("scenes", []):
+                    for version in scene.get("render_versions", []):
+                        version.setdefault("final_prompt", version.get("prompt"))
+                        version.setdefault("audio_mode", scene.get("audio_mode", "natural_ambience"))
+                        version.setdefault("no_speech", scene.get("no_speech", False))
+                        version.setdefault("no_music", scene.get("no_music", False))
+                        version.setdefault("custom_audio_instruction", scene.get("custom_audio_instruction", ""))
                 for run in payload.get("render_runs", []):
                     for item in run.get("items", []):
                         item.setdefault("current_phase", None)

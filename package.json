@@ -31,7 +31,7 @@
     "build:fast": "node scripts/run-script.js scripts/local-build --unpack --skip-python",
     "prepare:python": "node scripts/run-script.js scripts/prepare-python",
     "build:frontend": "vite build",
-    "start:unpacked:mac": "open release/mac-arm64/LTX\\ Desktop.app",
+    "start:unpacked:mac": "open release/mac-arm64/H3\\ Director\\ Desktop.app",
     "start:unpacked:win": "powershell -Command \"& '.\\release\\win-unpacked\\H3 Director Desktop.exe'\""
   },
   "dependencies": {

@@ -161,6 +161,18 @@ export const electronAPISchemas = {
     input: z.object({ filePath: z.string() }),
     output: z.void(),
   },
+  saveH3RenderCopy: {
+    input: z.object({ projectRoot: z.string(), videoFile: z.string(), defaultName: z.string() }),
+    output: ipcResult({ path: z.string() }),
+  },
+  revealH3Render: {
+    input: z.object({ projectRoot: z.string(), videoFile: z.string() }),
+    output: ipcResult({ path: z.string() }),
+  },
+  openH3ProjectFolder: {
+    input: z.object({ projectRoot: z.string() }),
+    output: ipcResult({ path: z.string() }),
+  },
 
   // Logs
   getLogs: {

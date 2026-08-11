@@ -13,7 +13,7 @@ export function createWindow(): BrowserWindow {
     : path.join(app.getAppPath(), 'dist-electron', 'preload.js')
 
   // App icon — use .ico on Windows, .png elsewhere
-  const iconExt = process.platform === 'win32' ? 'icon.ico' : 'icon.png'
+  const iconExt = process.platform === 'win32' ? 'h3d-icon.ico' : 'h3d-icon.png'
   const iconPath = path.join(getCurrentDir(), 'resources', iconExt)
   logger.info(`[icon] Loading app icon from: ${iconPath} | exists: ${fs.existsSync(iconPath)}`)
   const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : undefined

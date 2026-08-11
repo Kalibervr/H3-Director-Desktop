@@ -39,6 +39,10 @@ OUTPUT_NODE_ID = "92"
 class ProviderError(RuntimeError):
     """A safe error whose message may be returned to a local client."""
 
+
+class RenderCancelled(ProviderError):
+    """A user cancellation; partial ComfyUI output must never be adopted."""
+
     def __init__(self, message: str, *, diagnostics: str | None = None) -> None:
         super().__init__(message)
         self.diagnostics = diagnostics
@@ -61,6 +65,7 @@ class SingleSceneRequest:
     prompt: str
     input_image: Path
     seed: int
+    original_prompt: str | None = None
     reference_fit: str = "fill_crop"
     aspect_ratio: str = "1:1 (Square)"
     resolution_megapixels: float = 0.4
@@ -69,6 +74,11 @@ class SingleSceneRequest:
     duration_seconds: float = VERIFIED_DURATION_SECONDS
     fps: int = VERIFIED_FPS
     output_filename_prefix: str = "MiniMax_H3"
+    managed_filename_prefix: str | None = None
+    audio_mode: str = "natural_ambience"
+    no_speech: bool = False
+    no_music: bool = False
+    custom_audio_instruction: str = ""
 
 
 def preprocess_reference_image(source: Path, width: int, height: int, fit: str) -> Path:
@@ -352,8 +362,9 @@ def create_immutable_render_version(
             continue
     if version_dir is None:
         raise ProviderError("No immutable render version slot is available.")
-    output = version_dir / "video.mp4"
-    metadata = version_dir / "metadata.json"
+    number = int(version_dir.name.removeprefix("v"))
+    output = version_dir / (f"{request.managed_filename_prefix}_v{number:03d}.mp4" if request.managed_filename_prefix else "video.mp4")
+    metadata = version_dir / ("render-metadata.json" if request.managed_filename_prefix else "metadata.json")
     try:
         shutil.copy2(source_output, output)
         metadata_payload = {
@@ -362,10 +373,19 @@ def create_immutable_render_version(
             "created_at": datetime.now(UTC).isoformat(),
             "prompt_id": prompt_id,
             "prompt": request.prompt,
+            "original_user_prompt": request.original_prompt or request.prompt,
+            "final_composed_prompt": request.prompt,
+            "audio_guidance": {
+                "audio_mode": request.audio_mode,
+                "no_speech": request.no_speech,
+                "no_music": request.no_music,
+                "custom_audio_instruction": request.custom_audio_instruction,
+            },
             "input_image_reference": str(request.input_image),
             "aspect_ratio": request.aspect_ratio,
             "resolution_megapixels": request.resolution_megapixels,
             "reference_fit": request.reference_fit,
+            "staged_input_dimensions": {"width": request.width, "height": request.height},
             "seed": request.seed,
             "width": request.width,
             "height": request.height,
@@ -419,6 +439,7 @@ class ComfyUIMiniMaxH3Provider:
         timeout_seconds: float = 1800.0,
         poll_interval_seconds: float = 2.0,
         status_callback: Callable[[str, str | None, int | None, int | None, str | None], None] | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> RenderResult:
         def report(
             status: str,
@@ -430,6 +451,9 @@ class ComfyUIMiniMaxH3Provider:
             if status_callback is not None:
                 status_callback(status, prompt_id, value, maximum, diagnostics)
 
+        def cancelled() -> bool:
+            return cancel_requested is not None and cancel_requested()
+
         report("Preparing")
         try:
             normalized_url = require_loopback_http_url(base_url)
@@ -437,6 +461,18 @@ class ComfyUIMiniMaxH3Provider:
                 raise ValueError
         except ValueError as exc:
             raise ProviderError("ComfyUI URL must be a loopback HTTP address.") from exc
+
+        def interrupt(prompt_id: str | None) -> None:
+            try:
+                if prompt_id:
+                    self._session.post(f"{normalized_url}/queue", json={"delete": [prompt_id]}, timeout=10.0, allow_redirects=False)
+                self._session.post(f"{normalized_url}/interrupt", json={}, timeout=10.0, allow_redirects=False)
+            except requests.RequestException:
+                pass
+            raise RenderCancelled("The render was cancelled by the user.")
+
+        if cancelled():
+            interrupt(None)
         template = load_verified_workflow(self._workflow_path)
         runtime = self._runtime_probe.probe(base_url=normalized_url, workflow=template)
         if runtime.status != "connected":
@@ -471,7 +507,12 @@ class ComfyUIMiniMaxH3Provider:
                     raise ProviderError("Local ComfyUI did not return a prompt ID.")
                 report("Submitted", prompt_id)
                 while True:
-                    message = websocket.recv(timeout=timeout_seconds)
+                    if cancelled():
+                        interrupt(prompt_id)
+                    try:
+                        message = websocket.recv(timeout=min(2.0, poll_interval_seconds))
+                    except TimeoutError:
+                        continue
                     update = parse_comfyui_progress_event(message, prompt_id)
                     if update is None:
                         continue
@@ -488,6 +529,8 @@ class ComfyUIMiniMaxH3Provider:
         deadline = time.monotonic() + timeout_seconds
         source_output: Path | None = None
         while time.monotonic() < deadline:
+            if cancelled():
+                interrupt(prompt_id)
             try:
                 history_response = self._session.get(
                     f"{normalized_url}/history/{quote(prompt_id, safe='')}",

@@ -17,6 +17,21 @@ test('active document and build identity are H3 Director Desktop', () => {
   assert.equal(packageJson.name, 'h3-director-desktop')
 })
 
+test('H3 uses readable native UI typography while technical values remain monospace', () => {
+  const css = read('frontend/index.css')
+  const home = read('frontend/views/Home.tsx')
+  const project = read('frontend/views/Project.tsx')
+  assert.match(css, /--ui-font: "Segoe UI", Inter, Arial, sans-serif/)
+  assert.match(css, /button,\s*\ninput,\s*\nselect,\s*\ntextarea/)
+  assert.match(css, /\.font-mono\s*\{\s*\n\s*font-family: var\(--technical-font\)/)
+  assert.match(css, /\.h3-director-ui \.text-zinc-600/)
+  assert.match(css, /\.h3-editor-shell \.text-zinc-500/)
+  assert.match(home, /h3-director-ui/)
+  assert.match(project, /h3-editor-shell/)
+  const selectSource = home.slice(home.indexOf('function H3ThemedSelect'), home.indexOf('const H3_RESOLUTION_PRESETS'))
+  assert.doesNotMatch(selectSource, /font-mono/)
+})
+
 test('workspace exposes the required first-slice controls without raw graph UI', () => {
   const home = read('frontend/views/Home.tsx')
   for (const label of ['Projects', 'Recent Projects', 'New Project', 'Scene prompt', 'Reference image', 'Format', 'Resolution', 'FPS', 'Duration', 'Frames', 'Seed', 'Render Scene', 'Storyboard']) {
@@ -32,14 +47,17 @@ test('duration is editable and frames use the documented MiniMax H3 17k+5 mappin
   assert.match(home, /17k\+5 grid/)
   assert.match(home, /updateSceneLocally\(\{ duration_seconds: duration, frame_count: h3FrameCountForDuration/)
   assert.equal((home.match(/Duration \(seconds\)/g) || []).length, 1)
-  assert.match(home, /<option value="1:1 \(Square\)">1:1<\/option>/)
-  assert.match(home, /<option value="16:9 \(Widescreen\)">16:9<\/option>/)
-  assert.match(home, /<option value="9:16 \(Portrait Widescreen\)">9:16<\/option>/)
+  assert.match(home, /function H3ThemedSelect/)
+  assert.match(home, /ariaLabel="Format"/)
+  assert.match(home, /ariaLabel="Resolution"/)
+  assert.match(home, /bg-\[#11151c\]/)
+  assert.match(home, /hover:bg-white\/10/)
+  assert.match(home, /bg-amber-300\/20/)
   assert.match(home, /derived from format/)
   assert.match(home, /'16:9 \(Widescreen\)': \{ 0\.4: \[864, 480\]/)
   assert.match(home, /updateSceneLocally\(\{ aspect_ratio: aspectRatio, width, height \}\)/)
   assert.match(home, /resolution_megapixels: resolutionMegapixels, width, height/)
-  assert.match(home, /Resolution<\/div><select value=\{scene\.resolution_megapixels\}/)
+  assert.match(home, /<H3ThemedSelect value=\{scene\.resolution_megapixels\} ariaLabel="Resolution"/)
   assert.equal((home.match(/Duration \(seconds\)/g) || []).length, 1)
   assert.match(home, /Fixed workflow value/)
 })
@@ -64,6 +82,29 @@ test('workspace exposes disk persistence, immutable versions and truthful phase 
   assert.match(projectClient, /selected_render_version_id/)
   assert.match(projectClient, /render_versions/)
   assert.doesNotMatch(home, /\d+% complete|progress:\s*\d+/i)
+})
+
+test('workspace exposes deterministic local audio guidance and managed render-file actions', () => {
+  const home = read('frontend/views/Home.tsx')
+  const audio = read('frontend/lib/h3-audio-guidance.ts')
+  const api = read('shared/electron-api-schema.ts')
+  for (const label of ['Audio guidance', 'Natural ambience', 'Dialogue', 'Silent', 'No speech', 'No music', 'Custom audio instruction', 'View final prompt', 'Save Copy', 'Show in Folder', 'Open Project Folder']) assert.match(home, new RegExp(label))
+  assert.match(audio, /No speech, no voices, no music, no ambient sound/)
+  assert.match(audio, /Natural environmental ambience appropriate to the scene/)
+  for (const endpoint of ['saveH3RenderCopy', 'revealH3Render', 'openH3ProjectFolder']) assert.match(api, new RegExp(endpoint))
+  assert.doesNotMatch(audio, /https?:\/\//)
+})
+
+test('workspace exposes Stop Render and H3 Director product branding', () => {
+  const home = read('frontend/views/Home.tsx')
+  const window = read('electron/window.ts')
+  const builder = read('electron-builder.yml')
+  const firstRun = read('frontend/components/FirstRunSetup.tsx')
+  for (const label of ['Stop Render', 'Cancelling', 'H3D', 'H3 Director']) assert.match(home, new RegExp(label))
+  assert.match(window, /h3d-icon\.ico/)
+  assert.match(builder, /resources\/h3d-icon\.ico/)
+  assert.match(firstRun, /H3 Director Desktop/)
+  assert.match(read('NOTICES.md'), /Lightricks|LTX/i)
 })
 
 test('workspace exposes persistent multi-scene creation and storyboard operations', () => {

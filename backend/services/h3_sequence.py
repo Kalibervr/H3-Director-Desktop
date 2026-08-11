@@ -10,13 +10,14 @@ from datetime import UTC, datetime
 from _routes._errors import HTTPError
 from api_types import H3ProjectRenderRequest, H3RenderRun, H3SequenceItem
 from services.h3_project_store import H3ProjectStore, ProjectStoreError
+from services.comfyui_minimax_h3_provider import RenderCancelled
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-RenderScene = Callable[[str, str, H3ProjectRenderRequest, Callable[[str, int | None, int | None, str | None], None]], object]
+RenderScene = Callable[[str, str, H3ProjectRenderRequest, Callable[[str, int | None, int | None, str | None], None], Callable[[], bool]], object]
 
 
 class H3SequenceCoordinator:
@@ -27,6 +28,7 @@ class H3SequenceCoordinator:
         self._render_scene = render_scene
         self._lock = threading.RLock()
         self._stop_requests: set[tuple[str, str]] = set()
+        self._cancel_requests: set[tuple[str, str]] = set()
         self._threads: dict[tuple[str, str], threading.Thread] = {}
 
     def start(
@@ -84,6 +86,8 @@ class H3SequenceCoordinator:
             if run.status != "running":
                 raise ProjectStoreError("The render queue is no longer running.")
             self._stop_requests.add((project_id, run_id))
+            if run.kind == "scene":
+                self._cancel_requests.add((project_id, run_id))
             updated = run.model_copy(update={"stop_after_current_requested": True})
             self._store.update_render_run(project_id, updated)
             return updated
@@ -105,6 +109,7 @@ class H3SequenceCoordinator:
                         lambda phase, value, maximum, diagnostics, sid=scene_id: self._phase(
                             project_id, run_id, sid, phase, value, maximum, diagnostics
                         ),
+                        lambda: key in self._cancel_requests,
                     )
                     project = self._store.get_project(project_id)
                     scene = next(item for item in project.scenes if item.id == scene_id)
@@ -116,6 +121,11 @@ class H3SequenceCoordinator:
                         continuity_artifact_id=artifact_id,
                         current_phase="Complete", progress_value=None, progress_max=None,
                     )
+                except RenderCancelled:
+                    self._store.set_scene_status(project_id, scene_id, "cancelled", error=None, phase="Cancelled")
+                    self._set_item(project_id, run_id, scene_id, "cancelled", completed_at=_now(), error="Cancelled by the user.", current_phase="Cancelled", progress_value=None, progress_max=None)
+                    self._cancel_remaining(project_id, run_id, "Cancelled by the user.")
+                    return
                 except Exception as exc:
                     message = str(exc).strip() if isinstance(exc, (HTTPError, ProjectStoreError)) else "The scene render failed safely."
                     project = self._store.get_project(project_id)
@@ -134,6 +144,7 @@ class H3SequenceCoordinator:
         finally:
             with self._lock:
                 self._stop_requests.discard(key)
+                self._cancel_requests.discard(key)
                 self._threads.pop(key, None)
 
     def _phase(
@@ -175,6 +186,9 @@ class H3SequenceCoordinator:
         items = [item.model_copy(update={
             "state": "cancelled", "completed_at": timestamp, "error": reason,
         }) if item.state == "waiting" else item for item in run.items]
+        for item in run.items:
+            if item.state == "waiting":
+                self._store.set_scene_status(project_id, item.scene_id, "cancelled", error=None, phase="Cancelled")
         self._store.update_render_run(project_id, run.model_copy(update={
             "status": "cancelled", "completed_at": timestamp, "current_scene_id": None,
             "stop_after_current_requested": True, "failure_or_cancel_reason": reason, "items": items,

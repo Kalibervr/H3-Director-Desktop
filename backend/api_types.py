@@ -192,6 +192,11 @@ class H3RenderVersion(BaseModel):
     video_file: str
     metadata_file: str
     prompt: str
+    final_prompt: str | None = None
+    audio_mode: Literal["natural_ambience", "dialogue", "silent"] = "natural_ambience"
+    no_speech: bool = False
+    no_music: bool = False
+    custom_audio_instruction: str = ""
     input_image_reference: str
     seed: int = Field(ge=0)
     width: int = Field(ge=1)
@@ -234,6 +239,10 @@ class H3Scene(BaseModel):
     order: int = Field(ge=1)
     name: str = Field(min_length=1, max_length=120)
     prompt: str
+    audio_mode: Literal["natural_ambience", "dialogue", "silent"] = "natural_ambience"
+    no_speech: bool = False
+    no_music: bool = False
+    custom_audio_instruction: str = ""
     reference_image: str | None
     reference_fit: Literal["fill_crop", "fit", "stretch"] = "fill_crop"
     aspect_ratio: H3AspectRatio = "1:1 (Square)"
@@ -293,7 +302,7 @@ class H3RenderRun(BaseModel):
 
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[8]
+    schema_version: Literal[9]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str
@@ -328,6 +337,10 @@ class H3SceneUpdateRequest(BaseModel):
     model_config = ConfigDict(strict=True)
     name: str | None = Field(default=None, min_length=1, max_length=120)
     prompt: str | None = None
+    audio_mode: Literal["natural_ambience", "dialogue", "silent"] | None = None
+    no_speech: bool | None = None
+    no_music: bool | None = None
+    custom_audio_instruction: str | None = Field(default=None, max_length=500)
     reference_image: str | None = None
     reference_fit: Literal["fill_crop", "fit", "stretch"] | None = None
     aspect_ratio: H3AspectRatio | None = None
