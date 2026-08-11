@@ -65,6 +65,8 @@ const backendHealthStatus = z.object({
   status: z.enum(['alive', 'restarting', 'dead']),
   exitCode: z.number().nullable().optional(),
 })
+const comfyRuntimeConfig = z.object({ rootPath: z.string(), pythonPath: z.string(), port: z.number().int().min(1).max(65535), autoLaunch: z.boolean() })
+const comfyRuntimeStatus = z.object({ state: z.enum(['not_configured', 'starting', 'checking', 'ready', 'incompatible', 'stopped', 'failed']), owned: z.boolean(), pid: z.number().nullable(), endpoint: z.string().nullable(), version: z.string().nullable(), error: z.string().nullable(), diagnostics: z.array(z.string()) })
 
 export type BackendHealthStatus = z.infer<typeof backendHealthStatus>
 
@@ -90,6 +92,12 @@ export const electronAPISchemas = {
     input: z.object({}),
     output: z.object({ version: z.string(), isPackaged: z.boolean(), modelsPath: z.string(), userDataPath: z.string() }),
   },
+  getComfyRuntimeConfig: { input: z.object({}), output: comfyRuntimeConfig },
+  saveComfyRuntimeConfig: { input: z.object({ config: comfyRuntimeConfig }), output: comfyRuntimeConfig },
+  getComfyRuntimeStatus: { input: z.object({}), output: comfyRuntimeStatus },
+  startComfyRuntime: { input: z.object({}), output: comfyRuntimeStatus },
+  stopComfyRuntime: { input: z.object({}), output: comfyRuntimeStatus },
+  restartComfyRuntime: { input: z.object({}), output: comfyRuntimeStatus },
 
   // First-run setup
   checkFirstRun: {

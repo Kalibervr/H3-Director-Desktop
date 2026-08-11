@@ -65,6 +65,8 @@ export function Home() {
   const [runtimeStatus, setRuntimeStatus] = useState<ComfyUIStatus>('unavailable')
   const [runtimeVersion, setRuntimeVersion] = useState<string | null>(null)
   const [runtimeError, setRuntimeError] = useState<string | null>(null)
+  const [lifecycle, setLifecycle] = useState<Awaited<ReturnType<typeof window.electronAPI.getComfyRuntimeStatus>> | null>(null)
+  const [runtimeConfig, setRuntimeConfig] = useState<Awaited<ReturnType<typeof window.electronAPI.getComfyRuntimeConfig>> | null>(null)
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved')
   const [rendering, setRendering] = useState(false)
   const [preparingContinuity, setPreparingContinuity] = useState(false)
@@ -108,14 +110,20 @@ export function Home() {
   }, [])
 
   useEffect(() => {
+    if (!runtimeConfig?.autoLaunch || lifecycle?.state !== 'stopped') return
+    void window.electronAPI.startComfyRuntime().then(setLifecycle)
+  }, [runtimeConfig?.autoLaunch, lifecycle?.state])
+
+  useEffect(() => {
     let active = true
     const refresh = async () => {
       try {
-        const status = await getH3RuntimeStatus()
+        const [status, managed] = await Promise.all([getH3RuntimeStatus(), window.electronAPI.getComfyRuntimeStatus()])
         if (!active) return
         setRuntimeStatus(status.status)
         setRuntimeVersion(status.comfyui_version)
         setRuntimeError(status.errors[0] ?? null)
+        setLifecycle(managed)
       } catch {
         if (active) {
           setRuntimeStatus('unavailable')
@@ -125,6 +133,7 @@ export function Home() {
       }
     }
     void refresh()
+    void window.electronAPI.getComfyRuntimeConfig().then(setRuntimeConfig)
     const interval = window.setInterval(() => void refresh(), 10_000)
     return () => { active = false; window.clearInterval(interval) }
   }, [])
@@ -369,6 +378,7 @@ export function Home() {
           <label className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Seed</div><input type="number" disabled={!scene} value={scene?.seed ?? 0} onChange={event => updateSceneLocally({ seed: Number(event.target.value) })} className="mt-1 w-full bg-transparent font-mono text-sm text-zinc-300 outline-none" /></label>
         </div>
         {!!scene?.render_versions.length && <div className="mt-5"><div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Render version</div><div className="mt-2 flex gap-2"><button aria-label="Previous version" disabled={activeVersionIndex <= 0} onClick={() => selectVersionAt(activeVersionIndex - 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronLeft className="h-4 w-4" /></button><select value={scene.selected_render_version_id ?? ''} onChange={event => void updateH3Scene(project!.id, scene.id, { selected_render_version_id: event.target.value }).then(replaceProject)} className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#11151c] px-3 py-3 text-sm text-zinc-300">{scene.render_versions.map(version => <option key={version.id} value={version.id}>v{String(version.number).padStart(3, '0')} · {new Date(version.created_at).toLocaleString()}</option>)}</select><button aria-label="Next version" disabled={activeVersionIndex < 0 || activeVersionIndex >= scene.render_versions.length - 1} onClick={() => selectVersionAt(activeVersionIndex + 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronRight className="h-4 w-4" /></button></div>{activeVersion && <div className="mt-2 rounded-lg bg-white/[0.025] p-2 text-[10px] leading-5 text-zinc-500"><div>{new Date(activeVersion.created_at).toLocaleString()} · {activeVersion.width}×{activeVersion.height} · {activeVersion.duration_seconds}s</div><div>Seed {activeVersion.seed} · Prompt ID {activeVersion.prompt_id}</div></div>}</div>}
+        <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs"><div className="flex items-center justify-between"><span className="font-semibold text-zinc-300">Local backend</span><span className="uppercase text-[10px] text-zinc-500">{lifecycle?.state.replace('_', ' ') ?? 'checking'}</span></div><p className="mt-1 text-[10px] text-zinc-500">{lifecycle?.owned ? 'Started by H3 Director' : lifecycle?.state === 'ready' ? 'Using existing ComfyUI' : lifecycle?.error ?? 'Configure a local ComfyUI runtime.'}</p>{runtimeConfig && <div className="mt-3 grid gap-2"><input value={runtimeConfig.rootPath} onChange={e => setRuntimeConfig({ ...runtimeConfig, rootPath: e.target.value })} placeholder="ComfyUI root" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><input value={runtimeConfig.pythonPath} onChange={e => setRuntimeConfig({ ...runtimeConfig, pythonPath: e.target.value })} placeholder="ComfyUI Python" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><label className="flex items-center gap-2 text-[10px] text-zinc-500">Port <input type="number" value={runtimeConfig.port} onChange={e => setRuntimeConfig({ ...runtimeConfig, port: Number(e.target.value) })} className="w-16 rounded border border-white/10 bg-black/30 px-1 py-1 text-zinc-300" /><input type="checkbox" checked={runtimeConfig.autoLaunch} onChange={e => setRuntimeConfig({ ...runtimeConfig, autoLaunch: e.target.checked })} /> Auto-launch</label><button onClick={() => void window.electronAPI.saveComfyRuntimeConfig({ config: runtimeConfig }).then(setRuntimeConfig)} className="rounded border border-white/10 px-2 py-1.5 text-[10px]">Save runtime settings</button></div>}<div className="mt-3 grid grid-cols-3 gap-1"><button onClick={() => void window.electronAPI.startComfyRuntime().then(setLifecycle)} className="rounded border border-emerald-400/20 px-2 py-1.5 text-[10px] text-emerald-200">Start</button><button disabled={!lifecycle?.owned} onClick={() => void window.electronAPI.stopComfyRuntime().then(setLifecycle)} className="rounded border border-red-400/20 px-2 py-1.5 text-[10px] text-red-200 disabled:opacity-30">Stop</button><button disabled={!lifecycle?.owned} onClick={() => void window.electronAPI.restartComfyRuntime().then(setLifecycle)} className="rounded border border-amber-400/20 px-2 py-1.5 text-[10px] text-amber-200 disabled:opacity-30">Restart</button></div></div>
         {runtimeError && runtimeStatus !== 'connected' && <p className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200/70">{runtimeError}</p>}
         {(workspaceError || scene?.last_error) && <div className="mt-4 rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-300"><p>{workspaceError ?? scene?.last_error}</p>{scene?.diagnostics && <details className="mt-2 text-[10px] text-red-200/60"><summary className="cursor-pointer">Technical diagnostics</summary><div className="mt-1 font-mono">{scene.diagnostics}</div></details>}</div>}
         <button onClick={() => void renderScene()} disabled={!canRender || phaseActive || Boolean(activeRun)} className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-300 to-orange-500 px-4 py-3.5 text-sm font-bold text-zinc-950 disabled:opacity-30">{rendering || phaseActive ? <Loader2 className="h-4 w-4 animate-spin" /> : scene?.status === 'failed' ? <RotateCcw className="h-4 w-4" /> : <Clapperboard className="h-4 w-4" />}{rendering || phaseActive ? STATUS_LABELS[scene?.status ?? 'queued'] : scene?.status === 'failed' ? 'Retry Render' : scene?.render_versions.length ? 'Render New Version' : 'Render Scene'}</button>

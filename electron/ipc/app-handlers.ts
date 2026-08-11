@@ -6,6 +6,7 @@ import { isPythonReady, downloadPythonEmbed } from '../python-setup'
 import { getBackendHealthStatus, getBackendUrl, getAuthToken, getAdminToken, startPythonBackend, setGenerationActive } from '../python-backend'
 import { getMainWindow } from '../window'
 import { handle } from './typed-handle'
+import { getComfyRuntimeConfig, getComfyRuntimeStatus, restartComfyRuntime, saveComfyRuntimeConfig, startComfyRuntime, stopComfyRuntime } from '../comfyui-runtime'
 
 function getModelsPath(): string {
   const modelsPath = path.join(app.getPath('userData'), 'models')
@@ -70,6 +71,12 @@ export function registerAppHandlers(): void {
   handle('getBackend', () => {
     return { url: getBackendUrl() ?? '', token: getAuthToken() ?? '' }
   })
+  handle('getComfyRuntimeConfig', () => getComfyRuntimeConfig())
+  handle('saveComfyRuntimeConfig', ({ config }) => saveComfyRuntimeConfig(config))
+  handle('getComfyRuntimeStatus', async () => await getComfyRuntimeStatus())
+  handle('startComfyRuntime', async () => await startComfyRuntime())
+  handle('stopComfyRuntime', () => stopComfyRuntime())
+  handle('restartComfyRuntime', async () => await restartComfyRuntime())
 
   handle('getModelsPath', () => {
     return getModelsPath()

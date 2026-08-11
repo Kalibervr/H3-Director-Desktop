@@ -4,6 +4,7 @@ import path from 'path'
 
 export interface AppState {
   projectAssetsPath?: string
+  comfyuiRuntime?: unknown
   [key: string]: unknown
 }
 

@@ -188,7 +188,7 @@ class ComfyUIMiniMaxH3Handler:
                 workflow_contract_valid=False,
                 errors=[str(exc)],
             )
-        result = self._runtime_probe.probe(base_url=base_url, workflow=workflow)
+        result = self._runtime_probe.probe(base_url=base_url, workflow=workflow, production_runtime=True)
         return ComfyUIProbeResponse(
             status=result.status,
             comfyui_version=result.comfyui_version,

@@ -10,6 +10,7 @@ import { registerVideoProcessingHandlers } from './ipc/video-processing-handlers
 import { logger } from './logger'
 import { initSessionLog } from './logging-management'
 import { stopPythonBackend } from './python-backend'
+import { stopManagedComfyRuntimeOnExit } from './comfyui-runtime'
 import { createWindow, getMainWindow } from './window'
 
 function logAppVersion(): void {
@@ -78,6 +79,7 @@ if (!gotLock) {
   })
 
   app.on('before-quit', () => {
+    stopManagedComfyRuntimeOnExit()
     stopExportProcess()
     stopPythonBackend()
   })
