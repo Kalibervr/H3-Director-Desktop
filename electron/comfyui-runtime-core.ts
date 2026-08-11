@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 
 export type ComfyRuntimeState = 'not_configured' | 'starting' | 'checking' | 'ready' | 'incompatible' | 'stopped' | 'failed'
-export interface ComfyRuntimeConfig { rootPath: string; pythonPath: string; port: number; autoLaunch: boolean; extraModelPathsConfig?: string; inputDirectory?: string; outputDirectory?: string }
+export interface ComfyRuntimeConfig { rootPath: string; pythonPath: string; port: number; autoLaunch: boolean; sageAttention?: boolean; extraModelPathsConfig?: string; inputDirectory?: string; outputDirectory?: string }
 export interface ComfyRuntimeStatus { state: ComfyRuntimeState; owned: boolean; pid: number | null; endpoint: string | null; version: string | null; error: string | null; diagnostics: string[] }
 export interface ComfyRuntimeDependencies { getConfig: () => ComfyRuntimeConfig; saveConfig: (config: ComfyRuntimeConfig) => void; getBackend: () => { url: string | null; token: string | null }; spawn?: typeof spawn }
 const defaults: ComfyRuntimeConfig = { rootPath: '', pythonPath: '', port: 8188, autoLaunch: false }
@@ -25,5 +25,5 @@ export class ComfyRuntimeCore {
   stop(){if(!this.managed)return {...this.status,error:'Only an H3 Director-owned ComfyUI process can be stopped.'};this.set({state:'stopped'});this.managed.kill();return this.status}
   async restart(){if(!this.managed)return {...this.status,error:'Only an H3 Director-owned ComfyUI process can be restarted.'};this.stop();await new Promise(r=>setTimeout(r,500));return this.start()}
   shutdown(){if(this.managed){this.set({state:'stopped'});this.managed.kill()}}
-  launchArgs(){const c=this.config();const args=['-s','main.py','--listen','127.0.0.1','--port',String(c.port),'--feature-flag','enable_telemetry=false','--feature-flag','show_signin_button=false'];if(c.extraModelPathsConfig)args.push('--extra-model-paths-config',c.extraModelPathsConfig);if(c.inputDirectory)args.push('--input-directory',c.inputDirectory);if(c.outputDirectory)args.push('--output-directory',c.outputDirectory);return args}
+  launchArgs(){const c=this.config();const args=['-s','main.py','--listen','127.0.0.1','--port',String(c.port),'--feature-flag','enable_telemetry=false','--feature-flag','show_signin_button=false'];if(c.sageAttention)args.push('--use-sage-attention');if(c.extraModelPathsConfig)args.push('--extra-model-paths-config',c.extraModelPathsConfig);if(c.inputDirectory)args.push('--input-directory',c.inputDirectory);if(c.outputDirectory)args.push('--output-directory',c.outputDirectory);return args}
 }

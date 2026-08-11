@@ -111,7 +111,7 @@ class ComfyUIMiniMaxH3Handler:
         return self._project_call(self._project_store.list_projects)
 
     def create_project(self, request: H3ProjectCreateRequest) -> H3Project:
-        return self._project_call(lambda: self._project_store.create_project(request.name, request.scene_count))
+        return self._project_call(lambda: self._project_store.create_project(request.name, request.scene_count, request.sequence_mode))
 
     def get_project(self, project_id: str) -> H3Project:
         return self._project_call(lambda: self._project_store.get_project(project_id))
@@ -120,7 +120,9 @@ class ComfyUIMiniMaxH3Handler:
         return self._project_call(lambda: self._project_store.reopen_project(Path(project_root)))
 
     def update_project(self, project_id: str, request: H3ProjectUpdateRequest) -> H3Project:
-        return self._project_call(lambda: self._project_store.rename_project(project_id, request.name))
+        return self._project_call(lambda: self._project_store.update_project(
+            project_id, name=request.name, sequence_mode=request.sequence_mode,
+        ))
 
     def update_scene(self, project_id: str, scene_id: str, request: H3SceneUpdateRequest) -> H3Project:
         return self._project_call(lambda: self._project_store.update_scene(project_id, scene_id, request))
@@ -209,6 +211,7 @@ class ComfyUIMiniMaxH3Handler:
                 request=SingleSceneRequest(
                     prompt=request.prompt,
                     input_image=Path(request.input_image),
+                    reference_fit=request.reference_fit,
                     seed=request.seed,
                     width=request.width,
                     height=request.height,
@@ -280,6 +283,7 @@ class ComfyUIMiniMaxH3Handler:
                     height=scene.height,
                     duration_seconds=scene.duration_seconds,
                     fps=scene.fps,
+                    reference_fit=scene.reference_fit,
                     output_filename_prefix=f"scene_{scene.order:03d}",
                 ),
                 status_callback=report,

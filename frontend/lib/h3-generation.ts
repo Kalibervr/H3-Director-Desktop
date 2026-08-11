@@ -47,17 +47,17 @@ async function readJson<T>(response: Response): Promise<T> {
   return payload as T
 }
 
-export async function getH3RuntimeStatus(): Promise<H3RuntimeStatus> {
-  const response = await backendFetch('/api/comfyui/minimax-h3/status')
+export async function getH3RuntimeStatus(baseUrl: string): Promise<H3RuntimeStatus> {
+  const response = await backendFetch(`/api/comfyui/minimax-h3/status?base_url=${encodeURIComponent(baseUrl)}`)
   return readJson<H3RuntimeStatus>(response)
 }
 
-export async function renderH3Scene(request: H3RenderRequest): Promise<H3RenderResult> {
+export async function renderH3Scene(request: H3RenderRequest, baseUrl: string): Promise<H3RenderResult> {
   const response = await backendFetch('/api/comfyui/minimax-h3/render', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      base_url: 'http://127.0.0.1:8188',
+      base_url: baseUrl,
       ...request,
     }),
   })

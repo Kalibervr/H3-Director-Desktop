@@ -14,6 +14,7 @@ import { Tooltip } from '../../components/ui/tooltip'
 import { AssetContextMenu } from './AssetContextMenu'
 import { TakeContextMenu } from './TakeContextMenu'
 import { pathToFileUrl } from '../../lib/file-url'
+import { getH3AssetDisplayLabel } from '../../lib/h3-editor-bridge'
 import type { AssetListFilters } from './editor-state'
 import { equalAssetBins, selectAssetBins, selectAssets, selectVisibleAssets } from './editor-selectors'
 import { useEditorActions, useEditorStore } from './editor-store'
@@ -759,6 +760,7 @@ export const VideoEditorAssetsPanel = forwardRef<VideoEditorAssetsPanelHandle, V
             <div className="grid grid-cols-2 gap-2">
               {filteredAssets.map(asset => {
                 const cl = getColorLabel(asset.colorLabel)
+                const h3Label = getH3AssetDisplayLabel(asset)
                 return (
                   <div
                     key={asset.id}
@@ -959,7 +961,7 @@ export const VideoEditorAssetsPanel = forwardRef<VideoEditorAssetsPanelHandle, V
                     )}
                     <div className="absolute bottom-1 left-1 flex items-center gap-1 px-1.5 py-0.5 rounded bg-black/70 text-[10px] text-white">
                       {asset.type === 'video' ? <Video className="h-3 w-3" /> : asset.type === 'audio' ? <Music className="h-3 w-3" /> : asset.type === 'adjustment' ? <Layers className="h-3 w-3" /> : <Image className="h-3 w-3" />}
-                      {asset.type === 'adjustment' ? 'Adj' : asset.duration ? `${asset.duration.toFixed(1)}s` : ''}
+                      {h3Label ?? (asset.type === 'adjustment' ? 'Adj' : asset.duration ? `${asset.duration.toFixed(1)}s` : '')}
                     </div>
                   </div>
                 )
@@ -997,7 +999,8 @@ export const VideoEditorAssetsPanel = forwardRef<VideoEditorAssetsPanelHandle, V
               </div>
               {visibleAssets.map(asset => {
                 const cl = getColorLabel(asset.colorLabel)
-                const name = asset.path ? asset.path.split(/[/\\]/).pop() || asset.path : asset.type === 'adjustment' ? 'Adjustment Layer' : asset.type.charAt(0).toUpperCase() + asset.type.slice(1)
+                const h3Label = getH3AssetDisplayLabel(asset)
+                const name = h3Label ?? (asset.path ? asset.path.split(/[/\\]/).pop() || asset.path : asset.type === 'adjustment' ? 'Adjustment Layer' : asset.type.charAt(0).toUpperCase() + asset.type.slice(1))
                 const dateStr = new Date(asset.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
                 return (
                   <div

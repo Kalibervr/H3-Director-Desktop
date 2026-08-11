@@ -9,6 +9,8 @@ const project = readFileSync(new URL('../../frontend/views/Project.tsx', import.
 const model = readFileSync(new URL('../../frontend/types/project-model.ts', import.meta.url), 'utf8')
 const storage = readFileSync(new URL('../../frontend/lib/project-storage.ts', import.meta.url), 'utf8')
 const exportHandler = readFileSync(new URL('../../electron/export/export-handler.ts', import.meta.url), 'utf8')
+const assetsPanel = readFileSync(new URL('../../frontend/views/editor/VideoEditorAssetsPanel.tsx', import.meta.url), 'utf8')
+const timelinePanel = readFileSync(new URL('../../frontend/views/editor/VideoEditorTimelineEditingPanel.tsx', import.meta.url), 'utf8')
 
 test('H3 editor bridge uses selected immutable versions in scene order', () => {
   assert.match(bridge, /sort\(\(a, b\) => a\.order - b\.order\)/)
@@ -18,14 +20,36 @@ test('H3 editor bridge uses selected immutable versions in scene order', () => {
 })
 
 test('editor assets retain complete H3 provenance', () => {
-  for (const field of ['projectId', 'sceneId', 'renderVersionId', 'outputSha256', 'metadataFile']) {
+  for (const field of ['projectId', 'sceneId', 'renderVersionId', 'sceneNumber', 'renderVersionNumber', 'outputSha256', 'metadataFile']) {
     assert.match(model, new RegExp(field))
     assert.match(bridge, new RegExp(field))
   }
 })
 
-test('existing editor projects are not silently rebuilt', () => {
-  assert.match(home, /existing\s*\? replaceVersions \? replaceH3EditorVersions\(project, existing\) : existing/)
+test('H3 labels use persisted project scene order and render version numbers, not filenames', () => {
+  assert.match(bridge, /orderedScenes\(project\)/)
+  assert.match(bridge, /sceneNumber: sceneIndex \+ 1/)
+  assert.match(bridge, /renderVersionNumber: version\.number/)
+  assert.match(bridge, /Scene \$\{String\(source\.sceneNumber\)/)
+  assert.match(bridge, /refreshH3EditorProvenance/)
+})
+
+test('H3 provenance labels are rendered in asset grid, list, and existing timeline clip labels', () => {
+  assert.match(assetsPanel, /const h3Label = getH3AssetDisplayLabel\(asset\)/)
+  assert.match(assetsPanel, /\{h3Label \?\? \(asset\.type === 'adjustment'/)
+  assert.match(assetsPanel, /const name = h3Label \?\? \(/)
+  assert.match(timelinePanel, /getH3AssetDisplayLabel\(clip\.asset, false\)/)
+})
+
+test('Director keeps backend details collapsed until Advanced backend settings is opened', () => {
+  assert.match(home, /<details className="mt-3 border-t border-white\/10 pt-3"><summary[^>]*>Advanced backend settings<\/summary>/)
+  assert.match(home, /Ready \/ \$\{lifecycle\.owned \? 'H3 managed' : 'External'\}/)
+  assert.match(home, /lifecycle\?\.diagnostics\.length/)
+  assert.doesNotMatch(home, /Managed runtime settings/)
+})
+
+test('existing editor projects retain their edits while display provenance is refreshed', () => {
+  assert.match(home, /existing\s*\? replaceVersions \? replaceH3EditorVersions\(project, existing\) : refreshH3EditorProvenance\(project, existing\)/)
   assert.match(home, /Update \{editorUpdates\.length\} selected version/)
 })
 

@@ -118,6 +118,7 @@ class MiniMaxH3RenderRequest(BaseModel):
     base_url: str = "http://127.0.0.1:8188"
     prompt: NonEmptyPrompt
     input_image: str
+    reference_fit: Literal["fill_crop", "fit", "stretch"] = "fill_crop"
     seed: int = Field(ge=0, le=0xFFFFFFFFFFFFFFFF)
     width: int = Field(default=640, ge=1)
     height: int = Field(default=640, ge=1)
@@ -221,6 +222,7 @@ class H3Scene(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     prompt: str
     reference_image: str | None
+    reference_fit: Literal["fill_crop", "fit", "stretch"] = "fill_crop"
     width: int = Field(ge=1)
     height: int = Field(ge=1)
     fps: int = Field(ge=1)
@@ -276,13 +278,14 @@ class H3RenderRun(BaseModel):
 
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[5]
+    schema_version: Literal[6]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str
     updated_at: str
     project_root: str
     settings: H3ProjectSettings
+    sequence_mode: Literal["independent_shots", "continuous_sequence"] = "independent_shots"
     scenes: list[H3Scene]
     selected_scene_id: str
     render_runs: list[H3RenderRun]
@@ -292,11 +295,13 @@ class H3ProjectCreateRequest(BaseModel):
     model_config = ConfigDict(strict=True)
     name: str = Field(min_length=1, max_length=120)
     scene_count: int = Field(default=1, ge=1, le=999)
+    sequence_mode: Literal["independent_shots", "continuous_sequence"] = "independent_shots"
 
 
 class H3ProjectUpdateRequest(BaseModel):
     model_config = ConfigDict(strict=True)
-    name: str = Field(min_length=1, max_length=120)
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    sequence_mode: Literal["independent_shots", "continuous_sequence"] | None = None
 
 
 class H3ProjectOpenRequest(BaseModel):
@@ -309,6 +314,7 @@ class H3SceneUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     prompt: str | None = None
     reference_image: str | None = None
+    reference_fit: Literal["fill_crop", "fit", "stretch"] | None = None
     width: int | None = Field(default=None, ge=1)
     height: int | None = Field(default=None, ge=1)
     fps: int | None = Field(default=None, ge=1)

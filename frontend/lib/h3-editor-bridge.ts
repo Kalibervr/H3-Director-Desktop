@@ -11,9 +11,20 @@ import {
 
 export const h3EditorProjectId = (h3ProjectId: string) => `h3-editor-${h3ProjectId}`
 
+function orderedScenes(project: H3Project) {
+  return [...project.scenes].sort((a, b) => a.order - b.order)
+}
+
 function selectedVersion(project: H3Project, sceneId: string): H3RenderVersion | null {
   const scene = project.scenes.find(candidate => candidate.id === sceneId)
   return scene?.render_versions.find(version => version.id === scene.selected_render_version_id) ?? null
+}
+
+export function getH3AssetDisplayLabel(asset: Asset, includeDuration = true): string | null {
+  const source = asset.h3Source
+  if (!source?.sceneNumber || !source.renderVersionNumber) return null
+  const label = `Scene ${String(source.sceneNumber).padStart(2, '0')} · v${String(source.renderVersionNumber).padStart(3, '0')}`
+  return includeDuration && asset.duration != null ? `${label} · ${asset.duration.toFixed(1)}s` : label
 }
 
 export function buildH3EditorProject(project: H3Project): Project {
@@ -22,7 +33,7 @@ export function buildH3EditorProject(project: H3Project): Project {
   const clips: TimelineClip[] = []
   let startTime = 0
 
-  for (const scene of [...project.scenes].sort((a, b) => a.order - b.order)) {
+  for (const [sceneIndex, scene] of orderedScenes(project).entries()) {
     const version = selectedVersion(project, scene.id)
     if (!version) continue
     const duration = version.ffprobe.duration_seconds
@@ -41,6 +52,8 @@ export function buildH3EditorProject(project: H3Project): Project {
         projectId: project.id,
         sceneId: scene.id,
         renderVersionId: version.id,
+        sceneNumber: sceneIndex + 1,
+        renderVersionNumber: version.number,
         outputSha256: version.output_sha256,
         metadataFile: version.metadata_file,
       },
@@ -116,8 +129,42 @@ export function replaceH3EditorVersions(project: H3Project, editorProject: Proje
         projectId: project.id,
         sceneId: source.sceneId,
         renderVersionId: version.id,
+        sceneNumber: orderedScenes(project).findIndex(scene => scene.id === source.sceneId) + 1,
+        renderVersionNumber: version.number,
         outputSha256: version.output_sha256,
         metadataFile: version.metadata_file,
+      },
+    }
+  })
+  const byId = new Map(assets.map(asset => [asset.id, asset]))
+  return refreshH3EditorProvenance(project, {
+    ...editorProject,
+    assets,
+    timelines: editorProject.timelines.map(timeline => ({
+      ...timeline,
+      clips: timeline.clips.map(clip => ({ ...clip, asset: clip.assetId ? byId.get(clip.assetId) ?? clip.asset : clip.asset })),
+    })),
+    updatedAt: Date.now(),
+  })
+}
+
+/** Refreshes display-only H3 provenance from the authoritative persisted H3 scene order. */
+export function refreshH3EditorProvenance(project: H3Project, editorProject: Project): Project {
+  const scenes = orderedScenes(project)
+  const sceneNumbers = new Map(scenes.map((scene, index) => [scene.id, index + 1]))
+  const versionsByScene = new Map(scenes.map(scene => [scene.id, new Map(scene.render_versions.map(version => [version.id, version]))]))
+  const assets = editorProject.assets.map(asset => {
+    const source = asset.h3Source
+    if (!source || source.projectId !== project.id) return asset
+    const sceneNumber = sceneNumbers.get(source.sceneId)
+    const version = versionsByScene.get(source.sceneId)?.get(source.renderVersionId)
+    if (!sceneNumber || !version) return asset
+    return {
+      ...asset,
+      h3Source: {
+        ...source,
+        sceneNumber,
+        renderVersionNumber: version.number,
       },
     }
   })

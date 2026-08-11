@@ -27,6 +27,7 @@ import { ClipContextMenu, type ClipContextMenuState } from './ClipContextMenu'
 import type { TimelineClip, Track, SubtitleClip, Asset, TextOverlayStyle } from '../../types/project-model'
 import { ApiClient } from '../../lib/api-client'
 import { pathToFileUrl } from '../../lib/file-url'
+import { getH3AssetDisplayLabel } from '../../lib/h3-editor-bridge'
 import {
   areVideoGenerationSettingsEquivalent,
   getVideoGenerationModelSpecs,
@@ -74,6 +75,12 @@ import {
   selectZoom,
   selectActiveTool,
 } from './editor-selectors'
+
+function presentationTrackName(track: Track, tracks: Track[]): string {
+  if (track.type === 'subtitle') return track.name
+  const sameKindIndex = tracks.filter(candidate => candidate.kind === track.kind && candidate.type !== 'subtitle').indexOf(track)
+  return `${track.kind === 'audio' ? 'Audio' : 'Video'} ${sameKindIndex + 1}`
+}
 import { useTimelineDrag } from './useTimelineDrag'
 import { useEditorActions, useEditorStore } from './editor-store'
 
@@ -2071,8 +2078,9 @@ export function VideoEditorTimelineEditingPanel(props: VideoEditorTimelineEditin
                           : track.kind === 'audio' ? 'text-emerald-400/80'
                           : 'text-zinc-300'
                         }`}>
-                          {track.name}
+                          {presentationTrackName(track, tracks)}
                         </span>
+                        <span className="ml-1 text-[8px] text-zinc-600">{track.kind === 'audio' ? 'drop audio' : 'drop video'}</span>
                       </div>
                       <div className="flex items-center gap-0 flex-shrink-0">
                         <Tooltip content={track.locked ? 'Unlock' : 'Lock'} side="right">
@@ -2518,7 +2526,7 @@ export function VideoEditorTimelineEditingPanel(props: VideoEditorTimelineEditin
                         })()}
                         <div className={`flex-1 min-w-0 ${clip.type === 'audio' ? 'relative z-10' : ''}`}>
                           <p className={`text-[10px] truncate ${clip.type === 'adjustment' ? 'text-blue-300' : clip.type === 'text' ? 'text-cyan-300' : clip.type === 'audio' ? 'text-emerald-300' : 'text-zinc-300'}`}>
-                            {clip.type === 'adjustment' ? 'Adjustment Layer' : clip.type === 'text' ? (clip.textStyle?.text?.slice(0, 30) || 'Text') : clip.asset?.prompt?.slice(0, 30) || clip.importedName || 'Clip'}
+                            {clip.type === 'adjustment' ? 'Adjustment Layer' : clip.type === 'text' ? (clip.textStyle?.text?.slice(0, 30) || 'Text') : (clip.asset ? getH3AssetDisplayLabel(clip.asset, false) : null) || clip.asset?.prompt?.slice(0, 30) || clip.importedName || 'Clip'}
                           </p>
                           <div className="flex items-center gap-2 text-[9px] text-zinc-500">
                             <span>{clip.duration.toFixed(1)}s</span>

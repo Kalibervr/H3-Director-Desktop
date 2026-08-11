@@ -65,7 +65,7 @@ const backendHealthStatus = z.object({
   status: z.enum(['alive', 'restarting', 'dead']),
   exitCode: z.number().nullable().optional(),
 })
-const comfyRuntimeConfig = z.object({ rootPath: z.string(), pythonPath: z.string(), port: z.number().int().min(1).max(65535), autoLaunch: z.boolean() })
+const comfyRuntimeConfig = z.object({ rootPath: z.string(), pythonPath: z.string(), port: z.number().int().min(1).max(65535), autoLaunch: z.boolean(), sageAttention: z.boolean().optional(), extraModelPathsConfig: z.string().optional(), inputDirectory: z.string().optional(), outputDirectory: z.string().optional() })
 const comfyRuntimeStatus = z.object({ state: z.enum(['not_configured', 'starting', 'checking', 'ready', 'incompatible', 'stopped', 'failed']), owned: z.boolean(), pid: z.number().nullable(), endpoint: z.string().nullable(), version: z.string().nullable(), error: z.string().nullable(), diagnostics: z.array(z.string()) })
 
 export type BackendHealthStatus = z.infer<typeof backendHealthStatus>

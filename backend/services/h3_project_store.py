@@ -81,7 +81,7 @@ class H3ProjectStore:
         self._recover_interrupted_runs = False
         return sorted(projects, key=lambda item: item.updated_at, reverse=True)
 
-    def create_project(self, name: str, scene_count: int = 1) -> H3Project:
+    def create_project(self, name: str, scene_count: int = 1, sequence_mode: str = "independent_shots") -> H3Project:
         cleaned_name = name.strip()
         if not cleaned_name:
             raise ProjectStoreError("A project name is required.")
@@ -100,14 +100,17 @@ class H3ProjectStore:
             raise ProjectStoreError("The local project folder could not be created.") from exc
         timestamp = _now()
         scenes = [self._new_scene(number, _scene_storage_name(number)) for number in range(1, scene_count + 1)]
+        if sequence_mode == "continuous_sequence":
+            scenes = [scene.model_copy(update={"mode": "new_shot" if scene.order == 1 else "continue_previous"}) for scene in scenes]
         project = H3Project(
-            schema_version=5,
+            schema_version=6,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
             updated_at=timestamp,
             project_root=str(root),
             settings=H3ProjectSettings(width=640, height=640, fps=24, duration_seconds=5.0, frame_count=124),
+            sequence_mode=sequence_mode,
             scenes=scenes,
             selected_scene_id=scenes[0].id,
             render_runs=[],
@@ -145,6 +148,18 @@ class H3ProjectStore:
             raise ProjectStoreError("A project name is required.")
         project = self.get_project(project_id)
         return self.save_project(project.model_copy(update={"name": cleaned}))
+
+    def update_project(self, project_id: str, *, name: str | None = None, sequence_mode: str | None = None) -> H3Project:
+        project = self.get_project(project_id)
+        changes: dict[str, str] = {}
+        if name is not None:
+            cleaned = name.strip()
+            if not cleaned:
+                raise ProjectStoreError("A project name is required.")
+            changes["name"] = cleaned
+        if sequence_mode is not None:
+            changes["sequence_mode"] = sequence_mode
+        return self.save_project(project.model_copy(update=changes))
 
     def update_scene(self, project_id: str, scene_id: str, update: H3SceneUpdateRequest) -> H3Project:
         project = self.get_project(project_id)
@@ -410,14 +425,16 @@ class H3ProjectStore:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             original_schema = payload.get("schema_version")
-            migrated = original_schema in {1, 2, 3, 4}
+            migrated = original_schema in {1, 2, 3, 4, 5}
             if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
             if migrated:
-                payload["schema_version"] = 5
+                payload["schema_version"] = 6
+                payload.setdefault("sequence_mode", "independent_shots")
                 for scene in payload.get("scenes", []):
                     scene.setdefault("mode", "new_shot")
+                    scene.setdefault("reference_fit", "fill_crop")
                     scene.setdefault("continuity_strategy", "last_valid_frame")
                     scene.setdefault("continuity_offset_frames", 0)
                     scene.setdefault("selected_continuity_artifact_id", None)

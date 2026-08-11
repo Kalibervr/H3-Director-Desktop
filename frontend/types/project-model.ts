@@ -293,6 +293,8 @@ export const assetSchema = z.object({
     projectId: z.string(),
     sceneId: z.string(),
     renderVersionId: z.string(),
+    sceneNumber: z.number().int().positive().optional(),
+    renderVersionNumber: z.number().int().positive().optional(),
     outputSha256: z.string(),
     metadataFile: z.string(),
   }).optional(),

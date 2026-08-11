@@ -182,6 +182,10 @@ The new immutable `v001/video.mp4` and the ComfyUI source output are byte-identi
 - Production-safe ComfyUI launch arguments with telemetry, sign-in and remote features disabled. The inspected development process has telemetry explicitly enabled.
 - Automatic discovery, launch, readiness timeout, ownership, restart, log redaction and clean shutdown behavior required by the standalone product constraint; production runtime bundling is intentionally out of scope for this phase.
 
+## Future workflow-profile extension seam
+
+The provider boundary is intentionally profile-oriented: the currently verified and implemented profile is `minimax_h3_image_to_video`. Future `minimax_h3_text_to_video` and verified multi-shot profiles require their own API workflow, `/object_info` metadata, required-model inventory, input/output mapping, and real render evidence before implementation. No text-to-video or multi-shot control is exposed by the current product.
+
 ## Implemented provider boundary
 
 A tested, read-only `ComfyUIRuntimeProbe` and workflow-contract validator enforce runtime compatibility. The development-only `ComfyUIMiniMaxH3Provider` adds one-image staging, one `/prompt` submission, history polling, safe output discovery, bundled-ffprobe verification, and immutable local render versioning. All ComfyUI connections are loopback HTTP. Neither component exposes the graph in the frontend or manages/bundles the runtime.

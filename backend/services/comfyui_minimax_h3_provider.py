@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import time
+import tempfile
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -58,12 +59,35 @@ class HttpSession(Protocol):
 class SingleSceneRequest:
     prompt: str
     input_image: Path
+    reference_fit: str = "fill_crop"
     seed: int
     width: int = VERIFIED_WIDTH
     height: int = VERIFIED_HEIGHT
     duration_seconds: float = VERIFIED_DURATION_SECONDS
     fps: int = VERIFIED_FPS
     output_filename_prefix: str = "MiniMax_H3"
+
+
+def preprocess_reference_image(source: Path, width: int, height: int, fit: str) -> Path:
+    """Create a separate exact-size PNG; never mutate the user's source image."""
+    if fit not in {"fill_crop", "fit", "stretch"}:
+        raise ProviderError("Reference fit mode is invalid.")
+    with Image.open(source) as original:
+        image = original.convert("RGB")
+        if fit == "stretch":
+            rendered = image.resize((width, height), Image.Resampling.LANCZOS)
+        else:
+            scale = max(width / image.width, height / image.height) if fit == "fill_crop" else min(width / image.width, height / image.height)
+            resized = image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), Image.Resampling.LANCZOS)
+            if fit == "fill_crop":
+                left = (resized.width - width) // 2; top = (resized.height - height) // 2
+                rendered = resized.crop((left, top, left + width, top + height))
+            else:
+                rendered = Image.new("RGB", (width, height), (18, 18, 18))
+                rendered.paste(resized, ((width - resized.width) // 2, (height - resized.height) // 2))
+        target = Path(tempfile.mkstemp(prefix="h3-reference-", suffix=".png")[1])
+        rendered.save(target, "PNG")
+        return target
 
 
 @dataclass(frozen=True)
@@ -411,7 +435,14 @@ class ComfyUIMiniMaxH3Provider:
         except (OSError, ValueError) as exc:
             raise ProviderError("The input image is invalid.") from exc
 
-        staged_name = self._upload_image(normalized_url, request.input_image)
+        staged_source = preprocess_reference_image(request.input_image, request.width, request.height, request.reference_fit)
+        try:
+            staged_name = self._upload_image(normalized_url, staged_source)
+        finally:
+            try:
+                staged_source.unlink(missing_ok=True)
+            except OSError:
+                pass
         client_id = uuid.uuid4().hex
         payload = build_prompt_payload(template, request, staged_name, client_id)
         websocket_url = normalized_url.replace("http://", "ws://", 1) + f"/ws?clientId={client_id}"

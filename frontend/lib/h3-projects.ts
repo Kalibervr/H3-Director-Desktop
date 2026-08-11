@@ -2,6 +2,8 @@ import { backendFetch } from './backend'
 
 export type H3SceneStatus = 'idle' | 'queued' | 'preparing' | 'submitted' | 'rendering' | 'encoding' | 'verifying' | 'complete' | 'failed' | 'cancelled'
 export type H3SceneMode = 'new_shot' | 'continue_previous' | 'same_character_new_shot'
+export type H3ReferenceFit = 'fill_crop' | 'fit' | 'stretch'
+export type H3SequenceMode = 'independent_shots' | 'continuous_sequence'
 export type H3ContinuityStrategy = 'last_valid_frame' | 'offset_from_end'
 export type H3QueueState = 'waiting' | 'preparing' | 'rendering' | 'verifying' | 'complete' | 'failed' | 'skipped' | 'cancelled'
 
@@ -93,6 +95,7 @@ export interface H3Scene {
   name: string
   prompt: string
   reference_image: string | null
+  reference_fit: H3ReferenceFit
   width: number
   height: number
   fps: number
@@ -116,7 +119,7 @@ export interface H3Scene {
 }
 
 export interface H3Project {
-  schema_version: 5
+  schema_version: 6
   id: string
   name: string
   created_at: string
@@ -131,6 +134,7 @@ export interface H3Project {
   }
   scenes: H3Scene[]
   selected_scene_id: string
+  sequence_mode: H3SequenceMode
   render_runs: H3RenderRun[]
 }
 
@@ -147,9 +151,9 @@ export async function listH3Projects(): Promise<H3Project[]> {
   return readJson(await backendFetch('/api/comfyui/minimax-h3/projects'))
 }
 
-export async function createH3Project(name: string, sceneCount: number): Promise<H3Project> {
+export async function createH3Project(name: string, sceneCount: number, sequenceMode: H3SequenceMode = 'independent_shots'): Promise<H3Project> {
   return readJson(await backendFetch('/api/comfyui/minimax-h3/projects', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, scene_count: sceneCount }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, scene_count: sceneCount, sequence_mode: sequenceMode }),
   }))
 }
 
@@ -183,28 +187,30 @@ export async function getH3Project(projectId: string): Promise<H3Project> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}`))
 }
 
-export async function renameH3Project(projectId: string, name: string): Promise<H3Project> {
+export async function updateH3Project(projectId: string, update: Partial<Pick<H3Project, 'name' | 'sequence_mode'>>): Promise<H3Project> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}`, {
-    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(update),
   }))
 }
 
-export async function updateH3Scene(projectId: string, sceneId: string, update: Partial<Pick<H3Scene, 'name' | 'prompt' | 'reference_image' | 'width' | 'height' | 'fps' | 'duration_seconds' | 'frame_count' | 'seed' | 'selected_render_version_id' | 'mode' | 'continuity_strategy' | 'continuity_offset_frames'>>): Promise<H3Project> {
+export const renameH3Project = (projectId: string, name: string) => updateH3Project(projectId, { name })
+
+export async function updateH3Scene(projectId: string, sceneId: string, update: Partial<Pick<H3Scene, 'name' | 'prompt' | 'reference_image' | 'reference_fit' | 'width' | 'height' | 'fps' | 'duration_seconds' | 'frame_count' | 'seed' | 'selected_render_version_id' | 'mode' | 'continuity_strategy' | 'continuity_offset_frames'>>): Promise<H3Project> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(update),
   }))
 }
 
-export async function renderH3ProjectScene(projectId: string, sceneId: string): Promise<H3Project> {
+export async function renderH3ProjectScene(projectId: string, sceneId: string, baseUrl: string): Promise<H3Project> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/render`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base_url: 'http://127.0.0.1:8188' }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ base_url: baseUrl }),
   }))
 }
 
-export async function startH3Sequence(projectId: string, kind: 'scene' | 'from_here' | 'all', startSceneId?: string): Promise<H3RenderRun> {
+export async function startH3Sequence(projectId: string, kind: 'scene' | 'from_here' | 'all', startSceneId: string | undefined, baseUrl: string): Promise<H3RenderRun> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/sequences`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ base_url: 'http://127.0.0.1:8188', kind, start_scene_id: startSceneId ?? null }),
+    body: JSON.stringify({ base_url: baseUrl, kind, start_scene_id: startSceneId ?? null }),
   }))
 }
 

@@ -7,7 +7,7 @@ import { SceneStoryboard } from '../components/SceneStoryboard'
 import { useProjects } from '../contexts/ProjectContext'
 import { useView } from '../contexts/ViewContext'
 import { pathToFileUrl } from '../lib/file-url'
-import { buildH3EditorProject, getH3EditorUpdates, h3EditorProjectId, replaceH3EditorVersions } from '../lib/h3-editor-bridge'
+import { buildH3EditorProject, getH3EditorUpdates, h3EditorProjectId, refreshH3EditorProvenance, replaceH3EditorVersions } from '../lib/h3-editor-bridge'
 import { readProject, readProjectIds, writeProject, writeProjectIds } from '../lib/project-storage'
 import { getH3RuntimeStatus, type ComfyUIStatus } from '../lib/h3-generation'
 import {
@@ -19,6 +19,7 @@ import {
   listH3Projects,
   prepareH3Continuity,
   renameH3Project,
+  updateH3Project,
   startH3Sequence,
   stopH3Sequence,
   reorderH3Scenes,
@@ -27,6 +28,7 @@ import {
   type H3Project,
   type H3Scene,
   type H3SceneStatus,
+  type H3SequenceMode,
   type H3RenderRun,
 } from '../lib/h3-projects'
 
@@ -61,6 +63,7 @@ export function Home() {
   const [newProjectName, setNewProjectName] = useState('')
   const [newProjectSceneCount, setNewProjectSceneCount] = useState(5)
   const [customSceneCount, setCustomSceneCount] = useState('')
+  const [newProjectSequenceMode, setNewProjectSequenceMode] = useState<H3SequenceMode>('independent_shots')
   const [showNewProject, setShowNewProject] = useState(false)
   const [runtimeStatus, setRuntimeStatus] = useState<ComfyUIStatus>('unavailable')
   const [runtimeVersion, setRuntimeVersion] = useState<string | null>(null)
@@ -75,8 +78,10 @@ export function Home() {
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [clock, setClock] = useState(Date.now())
   const saveTimer = useRef<number | null>(null)
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null)
   const pendingSave = useRef<{ projectId: string; sceneId: string; changes: Partial<H3Scene> } | null>(null)
   const scene = selectedScene(project)
+  const managedBaseUrl = lifecycle?.endpoint ?? `http://127.0.0.1:${runtimeConfig?.port ?? 8190}`
   const activeRun = project?.render_runs.find(run => run.status === 'running') ?? null
   const latestRun = activeRun ?? project?.render_runs.at(-1) ?? null
   const viewedRun = project?.render_runs.find(run => run.id === selectedRunId) ?? latestRun
@@ -85,10 +90,11 @@ export function Home() {
 
   const openInEditor = (replaceVersions = false) => {
     if (!project) return
+    previewVideoRef.current?.pause()
     const editorProjectId = h3EditorProjectId(project.id)
     const existing = readProject(editorProjectId)
     const editorProject = existing
-      ? replaceVersions ? replaceH3EditorVersions(project, existing) : existing
+      ? replaceVersions ? replaceH3EditorVersions(project, existing) : refreshH3EditorProvenance(project, existing)
       : buildH3EditorProject(project)
     writeProject(editorProjectId, editorProject)
     writeProjectIds([editorProjectId, ...readProjectIds().filter(id => id !== editorProjectId)])
@@ -100,6 +106,32 @@ export function Home() {
     setProject(next)
     setProjects(current => [next, ...current.filter(item => item.id !== next.id)]
       .sort((a, b) => b.updated_at.localeCompare(a.updated_at)))
+  }
+
+  const saveRuntimeSettings = async () => {
+    if (!runtimeConfig) return
+    setSaveState('saving')
+    try {
+      const saved = await window.electronAPI.saveComfyRuntimeConfig({ config: runtimeConfig })
+      setRuntimeConfig(saved)
+      setSaveState('saved')
+    } catch (error) {
+      setSaveState('error')
+      setWorkspaceError(error instanceof Error ? error.message : 'Runtime settings could not be saved.')
+    }
+  }
+
+  const startManagedRuntime = async () => {
+    setWorkspaceError(null)
+    setLifecycle(current => current ? { ...current, state: 'starting', error: null } : current)
+    try {
+      const next = await window.electronAPI.startComfyRuntime()
+      setLifecycle(next)
+      if (next.state === 'failed') setWorkspaceError(next.error ?? 'Managed runtime failed to start.')
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : 'Managed runtime failed to start.')
+      setLifecycle(current => current ? { ...current, state: 'failed' } : current)
+    }
   }
 
   useEffect(() => {
@@ -118,7 +150,7 @@ export function Home() {
     let active = true
     const refresh = async () => {
       try {
-        const [status, managed] = await Promise.all([getH3RuntimeStatus(), window.electronAPI.getComfyRuntimeStatus()])
+        const [status, managed] = await Promise.all([getH3RuntimeStatus(managedBaseUrl), window.electronAPI.getComfyRuntimeStatus()])
         if (!active) return
         setRuntimeStatus(status.status)
         setRuntimeVersion(status.comfyui_version)
@@ -136,7 +168,7 @@ export function Home() {
     void window.electronAPI.getComfyRuntimeConfig().then(setRuntimeConfig)
     const interval = window.setInterval(() => void refresh(), 10_000)
     return () => { active = false; window.clearInterval(interval) }
-  }, [])
+  }, [managedBaseUrl])
 
   useEffect(() => {
     if (!project || (!activeRun && (!scene || !ACTIVE_STATUSES.includes(scene.status)))) return
@@ -222,7 +254,7 @@ export function Home() {
     try {
       const count = customSceneCount ? Number(customSceneCount) : newProjectSceneCount
       if (!Number.isInteger(count) || count < 1 || count > 999) throw new Error('Scene count must be a positive whole number up to 999.')
-      const next = await createH3Project(newProjectName.trim(), count)
+      const next = await createH3Project(newProjectName.trim(), count, newProjectSequenceMode)
       replaceProject(next)
       setNewProjectName('')
       setCustomSceneCount('')
@@ -243,6 +275,20 @@ export function Home() {
     void runSceneOperation(() => reorderH3Scenes(project.id, ids))
   }
 
+  const applyContinuePrevious = async () => {
+    if (!project) return
+    const ordered = [...project.scenes].sort((a, b) => a.order - b.order)
+    try {
+      for (const target of ordered.slice(1)) {
+        await updateH3Scene(project.id, target.id, { mode: 'continue_previous' })
+      }
+      replaceProject(await getH3Project(project.id))
+      setWorkspaceError(null)
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : 'Continue Previous could not be applied to every later scene.')
+    }
+  }
+
   const renderScene = async () => {
     if (!project || !scene || !scene.prompt.trim() || runtimeStatus !== 'connected') return
     setRendering(true)
@@ -250,12 +296,12 @@ export function Home() {
     try {
       await flushPendingSave()
       const saved = await updateH3Scene(project.id, scene.id, {
-        prompt: scene.prompt, reference_image: scene.reference_image, seed: scene.seed,
+        prompt: scene.prompt, reference_image: scene.reference_image, reference_fit: scene.reference_fit, seed: scene.seed,
         width: scene.width, height: scene.height, fps: scene.fps,
         duration_seconds: scene.duration_seconds, frame_count: scene.frame_count,
       })
       replaceProject({ ...saved, scenes: saved.scenes.map(item => item.id === scene.id ? { ...item, status: 'queued', current_phase: 'Waiting' } : item) })
-      const run = await startH3Sequence(project.id, 'scene', scene.id)
+      const run = await startH3Sequence(project.id, 'scene', scene.id, managedBaseUrl)
       setSelectedRunId(run.id)
       replaceProject(await getH3Project(project.id))
       setSaveState('saved')
@@ -290,7 +336,7 @@ export function Home() {
     setWorkspaceError(null)
     try {
       await flushPendingSave()
-      const run = await startH3Sequence(project.id, kind, kind === 'from_here' ? scene.id : undefined)
+      const run = await startH3Sequence(project.id, kind, kind === 'from_here' ? scene.id : undefined, managedBaseUrl)
       setSelectedRunId(run.id)
       replaceProject(await getH3Project(project.id))
     } catch (error) {
@@ -316,6 +362,10 @@ export function Home() {
   const previewUrl = activeVersion
     ? pathToFileUrl(activeVersion.video_file)
     : scene?.reference_image ? pathToFileUrl(scene.reference_image) : null
+  useEffect(() => {
+    previewVideoRef.current?.pause()
+  }, [project?.id, scene?.id, activeVersion?.id])
+  useEffect(() => () => previewVideoRef.current?.pause(), [])
   const sourceScene = scene && project ? [...project.scenes].sort((a, b) => a.order - b.order)[scene.order - 2] ?? null : null
   const sourceVersion = sourceScene?.render_versions.find(item => item.id === sourceScene.selected_render_version_id) ?? null
   const selectedContinuityArtifact = scene?.continuity_artifacts.find(item => item.id === scene.selected_continuity_artifact_id) ?? null
@@ -326,7 +376,7 @@ export function Home() {
     && selectedContinuityArtifact.offset_from_end_frames === (scene?.continuity_strategy === 'offset_from_end' ? scene.continuity_offset_frames : 0)
     ? selectedContinuityArtifact : null
   const modeHasInput = scene?.mode === 'continue_previous' ? Boolean(sourceVersion) : scene?.mode === 'new_shot' ? Boolean(scene.reference_image) : false
-  const canRender = Boolean(project && scene?.prompt.trim() && modeHasInput && runtimeStatus === 'connected' && !rendering && !preparingContinuity)
+  const canRender = Boolean(project && scene?.prompt.trim() && modeHasInput && lifecycle?.state === 'ready' && !rendering && !preparingContinuity)
   const phaseActive = scene ? ACTIVE_STATUSES.includes(scene.status) : false
   const activeVersionIndex = scene?.render_versions.findIndex(version => version.id === scene.selected_render_version_id) ?? -1
   const selectVersionAt = (index: number) => {
@@ -358,7 +408,7 @@ export function Home() {
           <input value={project?.name ?? ''} disabled={!project} onChange={event => project && setProject({ ...project, name: event.target.value })} onBlur={() => project?.name.trim() && void renameH3Project(project.id, project.name).then(replaceProject).catch(() => setSaveState('error'))} className="mt-1 w-96 bg-transparent text-xl font-semibold outline-none disabled:opacity-50" placeholder="No project selected" />
         </div><div className="flex items-center gap-3"><button onClick={() => openInEditor(false)} disabled={!project || !project.scenes.some(item => item.selected_render_version_id)} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-medium text-zinc-300 disabled:opacity-30"><Film className="mr-2 inline h-3.5 w-3.5" />Open in Editor</button>{editorUpdates.length > 0 && <button onClick={() => openInEditor(true)} className="rounded-lg border border-amber-300/30 px-3 py-2 text-xs text-amber-200">Update {editorUpdates.length} selected version{editorUpdates.length === 1 ? '' : 's'}</button>}<div className="text-right"><StatusPill status={runtimeStatus} />{runtimeVersion && <div className="mt-1 text-[10px] text-zinc-600">ComfyUI {runtimeVersion}</div>}</div></div></header>
         <section className="relative flex h-[calc(100%-64px)] min-h-[360px] items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl">
-          {previewUrl ? activeVersion ? <video key={previewUrl} src={previewUrl} controls autoPlay loop className="h-full w-full object-contain" /> : <img src={previewUrl} alt="Selected scene reference" className="h-full w-full object-contain opacity-90" /> : <div className="max-w-sm text-center"><Film className="mx-auto h-10 w-10 text-zinc-700" /><h2 className="mt-5 text-lg text-zinc-300">Your selected render will appear here</h2><p className="mt-2 text-sm text-zinc-600">Create a project and save the scene reference to begin.</p></div>}
+          {previewUrl ? activeVersion ? <video ref={previewVideoRef} key={previewUrl} src={previewUrl} controls preload="metadata" className="h-full w-full object-contain" /> : <img src={previewUrl} alt="Selected scene reference" className="h-full w-full object-contain opacity-90" /> : <div className="max-w-sm text-center"><Film className="mx-auto h-10 w-10 text-zinc-700" /><h2 className="mt-5 text-lg text-zinc-300">Your selected render will appear here</h2><p className="mt-2 text-sm text-zinc-600">Create a project and save the scene reference to begin.</p></div>}
           <div className="absolute left-4 top-4 rounded-full border border-white/10 bg-black/60 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-zinc-400">Scene preview</div>
           {scene && <div className={`absolute bottom-4 right-4 rounded-full px-3 py-1.5 text-xs font-semibold ${scene.status === 'failed' ? 'bg-red-400/90 text-red-950' : scene.status === 'complete' ? 'bg-emerald-400/90 text-emerald-950' : 'bg-amber-300/90 text-amber-950'}`}>{STATUS_LABELS[scene.status]}</div>}
         </section>
@@ -369,6 +419,10 @@ export function Home() {
         <label className="mt-6 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene name<input value={scene?.name ?? ''} disabled={!scene} onChange={event => updateSceneLocally({ name: event.target.value })} className="mt-2 w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2.5 text-sm normal-case tracking-normal outline-none focus:border-amber-300/40" /></label>
         <label className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene prompt<textarea value={scene?.prompt ?? ''} disabled={!scene} onChange={event => updateSceneLocally({ prompt: event.target.value })} className="mt-2 h-32 w-full resize-none rounded-xl border border-white/10 bg-black/30 p-3 text-sm normal-case leading-6 tracking-normal outline-none focus:border-amber-300/40" placeholder="Describe the shot, movement, lighting, mood and audio…" /></label>
         <label className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene Mode<select value={scene?.mode ?? 'new_shot'} disabled={!scene} onChange={event => updateSceneLocally({ mode: event.target.value as H3Scene['mode'] })} className="mt-2 w-full rounded-xl border border-white/10 bg-[#11151c] px-3 py-3 text-sm normal-case tracking-normal text-zinc-300"><option value="new_shot">New Shot</option><option value="continue_previous">Continue Previous</option><option value="same_character_new_shot">Same Character, New Shot — unavailable</option></select></label>
+        <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Reference fit<select value={scene?.reference_fit ?? 'fill_crop'} disabled={!scene} onChange={event => updateSceneLocally({ reference_fit: event.target.value as H3Scene['reference_fit'] })} className="mt-2 w-full rounded-xl border border-white/10 bg-[#11151c] px-3 py-3 text-sm normal-case tracking-normal text-zinc-300"><option value="fill_crop">Fill / Crop</option><option value="fit">Fit</option><option value="stretch">Stretch (may distort)</option></select><span className="mt-1 block normal-case tracking-normal text-[10px] text-zinc-600">The original image is never changed; H3 stages an exact-size render copy.</span></label>
+        {project && <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3"><label className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Sequence mode<select value={project.sequence_mode ?? 'independent_shots'} onChange={event => void updateH3Project(project.id, { sequence_mode: event.target.value as H3SequenceMode }).then(replaceProject).catch(error => setWorkspaceError(error instanceof Error ? error.message : 'Sequence mode could not be saved.'))} className="mt-2 w-full rounded-lg border border-white/10 bg-[#11151c] px-2 py-2 text-xs normal-case tracking-normal text-zinc-300"><option value="independent_shots">Independent shots</option><option value="continuous_sequence">Continuous sequence</option></select></label><button onClick={() => void applyContinuePrevious()} disabled={project.scenes.length < 2} className="mt-3 w-full rounded-lg border border-amber-300/20 px-2 py-2 text-xs text-amber-200 disabled:opacity-30">Apply Continue Previous to remaining scenes</button></div>}
+        {runtimeConfig && <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="flex items-center justify-between"><span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Sage Attention</span><label className="flex items-center gap-2 text-xs text-zinc-300"><input type="checkbox" checked={Boolean(runtimeConfig.sageAttention)} onChange={event => setRuntimeConfig({ ...runtimeConfig, sageAttention: event.target.checked })} />{runtimeConfig.sageAttention ? 'On' : 'Off'}</label></div><p className="mt-2 text-[10px] text-zinc-600">{lifecycle?.state === 'ready' ? `Effective: ${runtimeConfig.sageAttention ? 'On' : 'Off'} after Restart required.` : 'Saved setting applies when the managed backend starts.'}</p></div>}
+        {scene && <details className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs"><summary className="cursor-pointer font-semibold text-zinc-300">Scene Details</summary><dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-[10px] text-zinc-500"><dt>Scene</dt><dd className="text-right text-zinc-300">{String(scene.order).padStart(2, '0')} · {scene.name}</dd><dt>Mode</dt><dd className="text-right text-zinc-300">{scene.mode}</dd><dt>Output</dt><dd className="text-right text-zinc-300">{scene.width}×{scene.height} · {scene.fps} FPS</dd><dt>Duration / frames</dt><dd className="text-right text-zinc-300">{scene.duration_seconds}s · {scene.frame_count}</dd><dt>Seed / fit</dt><dd className="text-right text-zinc-300">{scene.seed} · {scene.reference_fit}</dd><dt>Render status</dt><dd className="text-right text-zinc-300">{STATUS_LABELS[scene.status]}</dd>{activeVersion && <><dt>Selected version</dt><dd className="text-right text-zinc-300">v{String(activeVersion.number).padStart(3, '0')}</dd><dt>Last render</dt><dd className="text-right text-zinc-300">{activeVersion.duration_seconds.toFixed(1)}s</dd><dt>Prompt ID</dt><dd className="truncate text-right text-zinc-300">{activeVersion.prompt_id}</dd></>}{selectedContinuityArtifact && <><dt>Continuity source</dt><dd className="truncate text-right text-zinc-300">{selectedContinuityArtifact.source_scene_id}</dd><dt>Source version</dt><dd className="truncate text-right text-zinc-300">{selectedContinuityArtifact.source_render_version_id}</dd></>}</dl></details>}
         {scene?.mode === 'same_character_new_shot' && <p className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200/70">Unavailable: the verified MiniMax H3 workflow has one image input and no separate character-reference control.</p>}
         {scene?.mode === 'continue_previous' && <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Continuity source</div><div className="mt-2 text-xs text-zinc-300">{sourceScene ? `${sourceScene.name} · ${sourceVersion?.id ?? 'no selected completed version'}` : 'Blocked · no previous scene'}</div><label className="mt-3 block text-[10px] uppercase tracking-wider text-zinc-600">Extraction strategy<select value={scene.continuity_strategy} onChange={event => updateSceneLocally({ continuity_strategy: event.target.value as H3Scene['continuity_strategy'] })} className="mt-1 w-full rounded-lg border border-white/10 bg-[#11151c] px-2 py-2 text-xs normal-case tracking-normal text-zinc-300"><option value="last_valid_frame">Last valid frame</option><option value="offset_from_end">Offset from end</option></select></label>{scene.continuity_strategy === 'offset_from_end' && <label className="mt-3 block text-[10px] uppercase tracking-wider text-zinc-600">Offset from end · frames<input type="number" min="0" value={scene.continuity_offset_frames} onChange={event => updateSceneLocally({ continuity_offset_frames: Math.max(0, Number(event.target.value)) })} className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-2 py-2 font-mono text-xs text-zinc-300" /></label>}{continuityArtifact && <div className="mt-3 flex gap-3"><img src={pathToFileUrl(continuityArtifact.image_file)} alt="Extracted continuity frame" className="h-16 w-24 rounded-lg bg-black object-cover" /><div className="text-[10px] leading-5 text-zinc-500">{continuityArtifact.id}<br />Frame {continuityArtifact.frame_index} · {continuityArtifact.timestamp_seconds.toFixed(3)}s<br />Source {continuityArtifact.source_render_version_id}</div></div>}<button onClick={() => void prepareContinuity()} disabled={!sourceVersion || preparingContinuity} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-amber-300/20 px-3 py-2 text-xs text-amber-200 disabled:opacity-30">{preparingContinuity && <Loader2 className="h-3 w-3 animate-spin" />} Extract Continuity Frame</button>{!sourceVersion && <p className="mt-2 text-[10px] text-red-300">Rendering is blocked until the previous scene has a selected completed render.</p>}</div>}
         <label className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Reference image<button onClick={() => void chooseReferenceImage()} disabled={!scene} className="mt-2 flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[0.025] px-3 py-3 text-sm normal-case tracking-normal text-zinc-400"><span className="truncate">{scene?.reference_image?.split(/[\\/]/).pop() ?? 'Choose image'}</span><ImagePlus className="h-4 w-4" /></button></label>
@@ -378,8 +432,8 @@ export function Home() {
           <label className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Seed</div><input type="number" disabled={!scene} value={scene?.seed ?? 0} onChange={event => updateSceneLocally({ seed: Number(event.target.value) })} className="mt-1 w-full bg-transparent font-mono text-sm text-zinc-300 outline-none" /></label>
         </div>
         {!!scene?.render_versions.length && <div className="mt-5"><div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Render version</div><div className="mt-2 flex gap-2"><button aria-label="Previous version" disabled={activeVersionIndex <= 0} onClick={() => selectVersionAt(activeVersionIndex - 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronLeft className="h-4 w-4" /></button><select value={scene.selected_render_version_id ?? ''} onChange={event => void updateH3Scene(project!.id, scene.id, { selected_render_version_id: event.target.value }).then(replaceProject)} className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#11151c] px-3 py-3 text-sm text-zinc-300">{scene.render_versions.map(version => <option key={version.id} value={version.id}>v{String(version.number).padStart(3, '0')} · {new Date(version.created_at).toLocaleString()}</option>)}</select><button aria-label="Next version" disabled={activeVersionIndex < 0 || activeVersionIndex >= scene.render_versions.length - 1} onClick={() => selectVersionAt(activeVersionIndex + 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronRight className="h-4 w-4" /></button></div>{activeVersion && <div className="mt-2 rounded-lg bg-white/[0.025] p-2 text-[10px] leading-5 text-zinc-500"><div>{new Date(activeVersion.created_at).toLocaleString()} · {activeVersion.width}×{activeVersion.height} · {activeVersion.duration_seconds}s</div><div>Seed {activeVersion.seed} · Prompt ID {activeVersion.prompt_id}</div></div>}</div>}
-        <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs"><div className="flex items-center justify-between"><span className="font-semibold text-zinc-300">Local backend</span><span className="uppercase text-[10px] text-zinc-500">{lifecycle?.state.replace('_', ' ') ?? 'checking'}</span></div><p className="mt-1 text-[10px] text-zinc-500">{lifecycle?.owned ? 'Started by H3 Director' : lifecycle?.state === 'ready' ? 'Using existing ComfyUI' : lifecycle?.error ?? 'Configure a local ComfyUI runtime.'}</p>{runtimeConfig && <div className="mt-3 grid gap-2"><input value={runtimeConfig.rootPath} onChange={e => setRuntimeConfig({ ...runtimeConfig, rootPath: e.target.value })} placeholder="ComfyUI root" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><input value={runtimeConfig.pythonPath} onChange={e => setRuntimeConfig({ ...runtimeConfig, pythonPath: e.target.value })} placeholder="ComfyUI Python" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><label className="flex items-center gap-2 text-[10px] text-zinc-500">Port <input type="number" value={runtimeConfig.port} onChange={e => setRuntimeConfig({ ...runtimeConfig, port: Number(e.target.value) })} className="w-16 rounded border border-white/10 bg-black/30 px-1 py-1 text-zinc-300" /><input type="checkbox" checked={runtimeConfig.autoLaunch} onChange={e => setRuntimeConfig({ ...runtimeConfig, autoLaunch: e.target.checked })} /> Auto-launch</label><button onClick={() => void window.electronAPI.saveComfyRuntimeConfig({ config: runtimeConfig }).then(setRuntimeConfig)} className="rounded border border-white/10 px-2 py-1.5 text-[10px]">Save runtime settings</button></div>}<div className="mt-3 grid grid-cols-3 gap-1"><button onClick={() => void window.electronAPI.startComfyRuntime().then(setLifecycle)} className="rounded border border-emerald-400/20 px-2 py-1.5 text-[10px] text-emerald-200">Start</button><button disabled={!lifecycle?.owned} onClick={() => void window.electronAPI.stopComfyRuntime().then(setLifecycle)} className="rounded border border-red-400/20 px-2 py-1.5 text-[10px] text-red-200 disabled:opacity-30">Stop</button><button disabled={!lifecycle?.owned} onClick={() => void window.electronAPI.restartComfyRuntime().then(setLifecycle)} className="rounded border border-amber-400/20 px-2 py-1.5 text-[10px] text-amber-200 disabled:opacity-30">Restart</button></div></div>
-        {runtimeError && runtimeStatus !== 'connected' && <p className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200/70">{runtimeError}</p>}
+        <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs"><div className="flex items-center justify-between"><div><div className="font-semibold text-zinc-300">Backend</div><div className="mt-1 text-[10px] text-zinc-500">{lifecycle?.state === 'ready' ? `Ready / ${lifecycle.owned ? 'H3 managed' : 'External'}` : lifecycle?.state.replace('_', ' ') ?? 'Checking'}{runtimeConfig ? ` / Sage: ${runtimeConfig.sageAttention ? 'On' : 'Off'}` : ''}</div></div><span className={`rounded-full px-2 py-1 text-[9px] uppercase ${lifecycle?.state === 'ready' ? 'bg-emerald-400/10 text-emerald-300' : lifecycle?.state === 'failed' || lifecycle?.state === 'incompatible' ? 'bg-red-400/10 text-red-300' : 'bg-amber-300/10 text-amber-200'}`}>{lifecycle?.state ?? 'checking'}</span></div>{(lifecycle?.error || (runtimeError && lifecycle?.state !== 'ready')) && <p className="mt-2 text-[10px] text-red-300">{lifecycle?.error ?? runtimeError}</p>}<details className="mt-3 border-t border-white/10 pt-3"><summary className="cursor-pointer text-[10px] font-semibold text-zinc-400">Advanced backend settings</summary>{runtimeConfig && <div className="mt-3 grid gap-2"><input value={runtimeConfig.rootPath} onChange={e => setRuntimeConfig({ ...runtimeConfig, rootPath: e.target.value })} placeholder="ComfyUI root" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><input value={runtimeConfig.pythonPath} onChange={e => setRuntimeConfig({ ...runtimeConfig, pythonPath: e.target.value })} placeholder="ComfyUI Python" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><label className="text-[10px] text-zinc-500">Port <input type="number" value={runtimeConfig.port} onChange={e => setRuntimeConfig({ ...runtimeConfig, port: Number(e.target.value) })} className="ml-2 w-16 rounded border border-white/10 bg-black/30 px-1 py-1 text-zinc-300" /></label><label className="flex items-center gap-2 text-[10px] text-zinc-500"><input type="checkbox" checked={runtimeConfig.autoLaunch} onChange={e => setRuntimeConfig({ ...runtimeConfig, autoLaunch: e.target.checked })} /> Auto-launch</label><input value={runtimeConfig.extraModelPathsConfig ?? ''} onChange={e => setRuntimeConfig({ ...runtimeConfig, extraModelPathsConfig: e.target.value })} placeholder="Extra model paths config" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><input value={runtimeConfig.inputDirectory ?? ''} onChange={e => setRuntimeConfig({ ...runtimeConfig, inputDirectory: e.target.value })} placeholder="ComfyUI input directory" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><input value={runtimeConfig.outputDirectory ?? ''} onChange={e => setRuntimeConfig({ ...runtimeConfig, outputDirectory: e.target.value })} placeholder="ComfyUI output directory" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><label className="flex items-center gap-2 text-[10px] text-zinc-500"><input type="checkbox" checked={Boolean(runtimeConfig.sageAttention)} onChange={e => setRuntimeConfig({ ...runtimeConfig, sageAttention: e.target.checked })} /> Sage Attention {lifecycle?.state === 'ready' ? '(Restart required)' : ''}</label><div className="grid grid-cols-2 gap-2"><button disabled={saveState === 'saving'} onClick={() => void saveRuntimeSettings()} className="rounded border border-white/10 px-2 py-1.5 text-[10px] disabled:opacity-40">{saveState === 'saving' ? 'Saving...' : 'Save runtime settings'}</button><button disabled={lifecycle?.state === 'starting' || lifecycle?.state === 'checking'} onClick={() => void startManagedRuntime()} className="rounded border border-emerald-400/20 px-2 py-1.5 text-[10px] text-emerald-200 disabled:opacity-40">{lifecycle?.state === 'starting' ? 'Starting...' : lifecycle?.state === 'checking' ? 'Checking...' : 'Start'}</button><button disabled={!lifecycle?.owned} onClick={() => void window.electronAPI.stopComfyRuntime().then(setLifecycle)} className="rounded border border-red-400/20 px-2 py-1.5 text-[10px] text-red-200 disabled:opacity-30">Stop</button><button disabled={!lifecycle?.owned} onClick={() => void window.electronAPI.restartComfyRuntime().then(setLifecycle)} className="rounded border border-amber-400/20 px-2 py-1.5 text-[10px] text-amber-200 disabled:opacity-30">Restart</button></div>{lifecycle?.diagnostics.length ? <details className="text-[10px] text-zinc-500"><summary className="cursor-pointer">Diagnostics</summary><div className="mt-1 font-mono">{lifecycle.diagnostics.join('\n')}</div></details> : null}</div>}</details></div>
+        {runtimeError && runtimeStatus !== 'connected' && lifecycle?.state !== 'ready' && <p className="mt-4 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200/70">{runtimeError}</p>}
         {(workspaceError || scene?.last_error) && <div className="mt-4 rounded-lg border border-red-500/20 bg-red-500/5 p-3 text-xs text-red-300"><p>{workspaceError ?? scene?.last_error}</p>{scene?.diagnostics && <details className="mt-2 text-[10px] text-red-200/60"><summary className="cursor-pointer">Technical diagnostics</summary><div className="mt-1 font-mono">{scene.diagnostics}</div></details>}</div>}
         <button onClick={() => void renderScene()} disabled={!canRender || phaseActive || Boolean(activeRun)} className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-300 to-orange-500 px-4 py-3.5 text-sm font-bold text-zinc-950 disabled:opacity-30">{rendering || phaseActive ? <Loader2 className="h-4 w-4 animate-spin" /> : scene?.status === 'failed' ? <RotateCcw className="h-4 w-4" /> : <Clapperboard className="h-4 w-4" />}{rendering || phaseActive ? STATUS_LABELS[scene?.status ?? 'queued'] : scene?.status === 'failed' ? 'Retry Render' : scene?.render_versions.length ? 'Render New Version' : 'Render Scene'}</button>
         <div className="mt-3 grid grid-cols-2 gap-2"><button onClick={() => void startSequence('from_here')} disabled={!project || !scene || runtimeStatus !== 'connected' || Boolean(activeRun) || sequenceStarting} className="rounded-lg border border-amber-300/20 px-3 py-2.5 text-xs text-amber-200 disabled:opacity-30">Render From Here</button><button onClick={() => void startSequence('all')} disabled={!project || runtimeStatus !== 'connected' || Boolean(activeRun) || sequenceStarting} className="rounded-lg border border-amber-300/20 px-3 py-2.5 text-xs text-amber-200 disabled:opacity-30">Render All</button></div>
@@ -390,6 +444,6 @@ export function Home() {
 
       <SceneStoryboard project={project} statusLabels={STATUS_LABELS} onSelect={target => project && target.id !== project.selected_scene_id && void runSceneOperation(() => selectH3Scene(project.id, target.id))} onAdd={() => project && void runSceneOperation(() => addH3Scene(project.id))} onDuplicate={target => project && void runSceneOperation(() => duplicateH3Scene(project.id, target.id))} onDelete={target => project && void runSceneOperation(() => deleteH3Scene(project.id, target.id))} onMove={moveScene} />
     </div>
-    {showNewProject && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"><div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#10141b] p-6"><h2 className="text-lg font-semibold">New Project</h2><p className="mt-1 text-sm text-zinc-500">Creates an app-owned project folder and persisted scene cards.</p><input autoFocus value={newProjectName} onChange={event => setNewProjectName(event.target.value)} placeholder="Project name" className="mt-5 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm outline-none" /><div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene count</div><div className="mt-2 grid grid-cols-4 gap-2">{[5, 10, 15].map(count => <button key={count} onClick={() => { setNewProjectSceneCount(count); setCustomSceneCount('') }} className={`rounded-lg border px-3 py-2 text-sm ${!customSceneCount && newProjectSceneCount === count ? 'border-amber-300/50 bg-amber-300/10 text-amber-200' : 'border-white/10 text-zinc-500'}`}>{count}</button>)}<input type="number" min="1" max="999" value={customSceneCount} onChange={event => setCustomSceneCount(event.target.value)} placeholder="Custom" aria-label="Custom positive scene count" className="rounded-lg border border-white/10 bg-black/30 px-2 text-center text-sm outline-none" /></div><div className="mt-5 flex justify-end gap-3"><button onClick={() => setShowNewProject(false)} className="px-4 py-2 text-sm text-zinc-500">Cancel</button><button onClick={() => void createProject()} disabled={!newProjectName.trim()} className="rounded-lg bg-amber-300 px-4 py-2 text-sm font-semibold text-zinc-950 disabled:opacity-30">Create Project</button></div></div></div>}
+    {showNewProject && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"><div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#10141b] p-6"><h2 className="text-lg font-semibold">New Project</h2><p className="mt-1 text-sm text-zinc-500">Creates an app-owned project folder and persisted scene cards.</p><input autoFocus value={newProjectName} onChange={event => setNewProjectName(event.target.value)} placeholder="Project name" className="mt-5 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm outline-none" /><div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene count</div><div className="mt-2 grid grid-cols-4 gap-2">{[5, 10, 15].map(count => <button key={count} onClick={() => { setNewProjectSceneCount(count); setCustomSceneCount('') }} className={`rounded-lg border px-3 py-2 text-sm ${!customSceneCount && newProjectSceneCount === count ? 'border-amber-300/50 bg-amber-300/10 text-amber-200' : 'border-white/10 text-zinc-500'}`}>{count}</button>)}<input type="number" min="1" max="999" value={customSceneCount} onChange={event => setCustomSceneCount(event.target.value)} placeholder="Custom" aria-label="Custom positive scene count" className="rounded-lg border border-white/10 bg-black/30 px-2 text-center text-sm outline-none" /></div><label className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Sequence mode<select value={newProjectSequenceMode} onChange={event => setNewProjectSequenceMode(event.target.value as H3SequenceMode)} className="mt-2 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm normal-case tracking-normal text-zinc-300"><option value="independent_shots">Independent shots</option><option value="continuous_sequence">Continuous sequence</option></select></label><div className="mt-5 flex justify-end gap-3"><button onClick={() => setShowNewProject(false)} className="px-4 py-2 text-sm text-zinc-500">Cancel</button><button onClick={() => void createProject()} disabled={!newProjectName.trim()} className="rounded-lg bg-amber-300 px-4 py-2 text-sm font-semibold text-zinc-950 disabled:opacity-30">Create Project</button></div></div></div>}
   </div>
 }
