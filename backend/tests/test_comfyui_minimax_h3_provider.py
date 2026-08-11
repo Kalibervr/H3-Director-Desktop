@@ -18,6 +18,7 @@ from services.comfyui_minimax_h3_provider import (
     discover_output,
     load_verified_workflow,
     parse_comfyui_progress_event,
+    preprocess_reference_image,
     probe_video,
 )
 
@@ -77,9 +78,8 @@ def test_maps_only_verified_fields_without_mutating_template(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
-        ({"width": 1280}, "640x640"),
-        ({"height": 720}, "640x640"),
-        ({"duration_seconds": 6.0}, "5 second"),
+        ({"width": 1280}, "incompatible dimensions"),
+        ({"height": 720}, "incompatible dimensions"),
         ({"fps": 30}, "24 FPS"),
     ],
 )
@@ -91,6 +91,65 @@ def test_rejects_unverified_controls(tmp_path: Path, changes: dict[str, object],
             "input.png",
             "client",
         )
+
+
+@pytest.mark.parametrize(
+    ("aspect_ratio", "megapixels", "width", "height"),
+    [
+        ("1:1 (Square)", 0.4, 640, 640), ("1:1 (Square)", 0.6, 800, 800),
+        ("1:1 (Square)", 0.8, 928, 928), ("1:1 (Square)", 1.0, 1024, 1024),
+        ("16:9 (Widescreen)", 0.4, 864, 480), ("16:9 (Widescreen)", 0.6, 1056, 608),
+        ("16:9 (Widescreen)", 0.8, 1216, 672), ("16:9 (Widescreen)", 1.0, 1376, 768),
+        ("9:16 (Portrait Widescreen)", 0.4, 480, 864), ("9:16 (Portrait Widescreen)", 0.6, 608, 1056),
+        ("9:16 (Portrait Widescreen)", 0.8, 672, 1216), ("9:16 (Portrait Widescreen)", 1.0, 768, 1376),
+    ],
+)
+def test_maps_verified_aspect_ratio_presets_to_resolution_selector(
+    tmp_path: Path, aspect_ratio: str, megapixels: float, width: int, height: int,
+) -> None:
+    payload = build_prompt_payload(
+        load_verified_workflow(WORKFLOW_PATH),
+        _request(_image(tmp_path / "input.png"), aspect_ratio=aspect_ratio, resolution_megapixels=megapixels, width=width, height=height),
+        "input.png",
+        "client",
+    )
+    assert payload["prompt"]["115"]["inputs"]["aspect_ratio"] == aspect_ratio
+    assert payload["prompt"]["115"]["inputs"]["megapixels"] == megapixels
+    assert payload["prompt"]["105:104"]["inputs"]["width"] == ["115", 0]
+    assert payload["prompt"]["105:104"]["inputs"]["height"] == ["115", 1]
+
+
+@pytest.mark.parametrize("target", [(640, 640), (1056, 608), (1216, 672), (768, 1376)])
+def test_reference_fit_stages_exact_dimensions_for_each_verified_preset(tmp_path: Path, target: tuple[int, int]) -> None:
+    source = _image(tmp_path / "source.png")
+    before = source.read_bytes()
+    staged = preprocess_reference_image(source, *target, "fill_crop")
+    try:
+        with Image.open(staged) as staged_image:
+            assert staged_image.size == target
+        assert source.read_bytes() == before
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def test_rejects_unverified_resolution_preset(tmp_path: Path) -> None:
+    with pytest.raises(ProviderError, match="resolution preset"):
+        build_prompt_payload(
+            load_verified_workflow(WORKFLOW_PATH),
+            _request(_image(tmp_path / "input.png"), resolution_megapixels=1.2),
+            "input.png",
+            "client",
+        )
+
+
+def test_maps_duration_to_the_verified_workflow_expression_input(tmp_path: Path) -> None:
+    payload = build_prompt_payload(
+        load_verified_workflow(WORKFLOW_PATH),
+        _request(_image(tmp_path / "input.png"), duration_seconds=10.0),
+        "input.png",
+        "client",
+    )
+    assert payload["prompt"]["105:111"]["inputs"]["value"] == 10.0
 
 
 def test_prompt_submission_payload_contains_no_wrapper_graph_metadata(tmp_path: Path) -> None:

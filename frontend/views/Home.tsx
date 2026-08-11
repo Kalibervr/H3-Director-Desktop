@@ -28,6 +28,8 @@ import {
   type H3Project,
   type H3Scene,
   type H3SceneStatus,
+  type H3AspectRatio,
+  type H3ResolutionMegapixels,
   type H3SequenceMode,
   type H3RenderRun,
 } from '../lib/h3-projects'
@@ -37,6 +39,16 @@ const STATUS_LABELS: Record<H3SceneStatus, string> = {
   idle: 'Ready', queued: 'Queued', preparing: 'Preparing input', submitted: 'Submitted',
   rendering: 'Rendering in ComfyUI', encoding: 'Encoding', verifying: 'Verifying with ffprobe',
   complete: 'Complete', failed: 'Failed', cancelled: 'Cancelled',
+}
+const H3_RESOLUTION_PRESETS: Record<H3AspectRatio, Record<H3ResolutionMegapixels, readonly [number, number]>> = {
+  '1:1 (Square)': { 0.4: [640, 640], 0.6: [800, 800], 0.8: [928, 928], 1: [1024, 1024] },
+  '16:9 (Widescreen)': { 0.4: [864, 480], 0.6: [1056, 608], 0.8: [1216, 672], 1: [1376, 768] },
+  '9:16 (Portrait Widescreen)': { 0.4: [480, 864], 0.6: [608, 1056], 0.8: [672, 1216], 1: [768, 1376] },
+}
+
+export function h3FrameCountForDuration(durationSeconds: number, fps: number): number {
+  const sampledFrames = Math.max(5, Math.round(durationSeconds * fps))
+  return sampledFrames + (5 - (sampledFrames % 17)) % 17
 }
 
 function StatusPill({ status }: { status: ComfyUIStatus }) {
@@ -296,7 +308,7 @@ export function Home() {
     try {
       await flushPendingSave()
       const saved = await updateH3Scene(project.id, scene.id, {
-        prompt: scene.prompt, reference_image: scene.reference_image, reference_fit: scene.reference_fit, seed: scene.seed,
+        prompt: scene.prompt, reference_image: scene.reference_image, reference_fit: scene.reference_fit, aspect_ratio: scene.aspect_ratio, resolution_megapixels: scene.resolution_megapixels, seed: scene.seed,
         width: scene.width, height: scene.height, fps: scene.fps,
         duration_seconds: scene.duration_seconds, frame_count: scene.frame_count,
       })
@@ -383,6 +395,20 @@ export function Home() {
     if (!project || !scene || index < 0 || index >= scene.render_versions.length) return
     void updateH3Scene(project.id, scene.id, { selected_render_version_id: scene.render_versions[index].id }).then(replaceProject)
   }
+  const updateDuration = (value: string) => {
+    const duration = Number(value)
+    if (!scene || !Number.isFinite(duration) || duration <= 0) return
+    updateSceneLocally({ duration_seconds: duration, frame_count: h3FrameCountForDuration(duration, scene.fps) })
+  }
+  const updateAspectRatio = (aspectRatio: H3AspectRatio) => {
+    const [width, height] = H3_RESOLUTION_PRESETS[aspectRatio][scene?.resolution_megapixels ?? 0.4]
+    updateSceneLocally({ aspect_ratio: aspectRatio, width, height })
+  }
+  const updateResolution = (resolutionMegapixels: H3ResolutionMegapixels) => {
+    if (!scene) return
+    const [width, height] = H3_RESOLUTION_PRESETS[scene.aspect_ratio][resolutionMegapixels]
+    updateSceneLocally({ resolution_megapixels: resolutionMegapixels, width, height })
+  }
 
   return <div className="h-screen overflow-hidden bg-[#07090d] text-zinc-100">
     <div className="grid h-full grid-cols-[250px_minmax(0,1fr)_360px] grid-rows-[minmax(0,1fr)_150px]">
@@ -426,9 +452,8 @@ export function Home() {
         {scene?.mode === 'same_character_new_shot' && <p className="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-xs text-amber-200/70">Unavailable: the verified MiniMax H3 workflow has one image input and no separate character-reference control.</p>}
         {scene?.mode === 'continue_previous' && <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Continuity source</div><div className="mt-2 text-xs text-zinc-300">{sourceScene ? `${sourceScene.name} · ${sourceVersion?.id ?? 'no selected completed version'}` : 'Blocked · no previous scene'}</div><label className="mt-3 block text-[10px] uppercase tracking-wider text-zinc-600">Extraction strategy<select value={scene.continuity_strategy} onChange={event => updateSceneLocally({ continuity_strategy: event.target.value as H3Scene['continuity_strategy'] })} className="mt-1 w-full rounded-lg border border-white/10 bg-[#11151c] px-2 py-2 text-xs normal-case tracking-normal text-zinc-300"><option value="last_valid_frame">Last valid frame</option><option value="offset_from_end">Offset from end</option></select></label>{scene.continuity_strategy === 'offset_from_end' && <label className="mt-3 block text-[10px] uppercase tracking-wider text-zinc-600">Offset from end · frames<input type="number" min="0" value={scene.continuity_offset_frames} onChange={event => updateSceneLocally({ continuity_offset_frames: Math.max(0, Number(event.target.value)) })} className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-2 py-2 font-mono text-xs text-zinc-300" /></label>}{continuityArtifact && <div className="mt-3 flex gap-3"><img src={pathToFileUrl(continuityArtifact.image_file)} alt="Extracted continuity frame" className="h-16 w-24 rounded-lg bg-black object-cover" /><div className="text-[10px] leading-5 text-zinc-500">{continuityArtifact.id}<br />Frame {continuityArtifact.frame_index} · {continuityArtifact.timestamp_seconds.toFixed(3)}s<br />Source {continuityArtifact.source_render_version_id}</div></div>}<button onClick={() => void prepareContinuity()} disabled={!sourceVersion || preparingContinuity} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-amber-300/20 px-3 py-2 text-xs text-amber-200 disabled:opacity-30">{preparingContinuity && <Loader2 className="h-3 w-3 animate-spin" />} Extract Continuity Frame</button>{!sourceVersion && <p className="mt-2 text-[10px] text-red-300">Rendering is blocked until the previous scene has a selected completed render.</p>}</div>}
         <label className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Reference image<button onClick={() => void chooseReferenceImage()} disabled={!scene} className="mt-2 flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/[0.025] px-3 py-3 text-sm normal-case tracking-normal text-zinc-400"><span className="truncate">{scene?.reference_image?.split(/[\\/]/).pop() ?? 'Choose image'}</span><ImagePlus className="h-4 w-4" /></button></label>
-        <div className="mt-6 grid grid-cols-2 gap-3">{scene && [
-          ['Width', scene.width], ['Height', scene.height], ['FPS', scene.fps], ['Duration', `${scene.duration_seconds}s`], ['Frames', scene.frame_count],
-        ].map(([label, value]) => <div key={label} className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">{label}</div><div className="mt-1 font-mono text-sm text-zinc-300">{value}</div></div>)}
+        {scene && <div className="mt-5 grid grid-cols-2 gap-3"><label className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Duration (seconds)</div><input type="number" min="0.1" step="0.1" value={scene.duration_seconds} onChange={event => updateDuration(event.target.value)} className="mt-1 w-full bg-transparent font-mono text-sm text-zinc-300 outline-none" /></label><div className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Frames (calculated)</div><div className="mt-1 font-mono text-sm text-zinc-300">{scene.frame_count}</div><div className="mt-1 text-[9px] text-zinc-600">MiniMax H3 17k+5 grid</div></div></div>}
+        <div className="mt-6 grid grid-cols-2 gap-3">{scene && <><label className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Format</div><select value={scene.aspect_ratio} onChange={event => updateAspectRatio(event.target.value as H3AspectRatio)} className="mt-1 w-full bg-transparent font-mono text-sm text-zinc-300 outline-none"><option value="1:1 (Square)">1:1</option><option value="16:9 (Widescreen)">16:9</option><option value="9:16 (Portrait Widescreen)">9:16</option></select></label><label className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Resolution</div><select value={scene.resolution_megapixels} onChange={event => updateResolution(Number(event.target.value) as H3ResolutionMegapixels)} className="mt-1 w-full bg-transparent font-mono text-sm text-zinc-300 outline-none">{([0.4, 0.6, 0.8, 1] as H3ResolutionMegapixels[]).map(megapixels => { const [width, height] = H3_RESOLUTION_PRESETS[scene.aspect_ratio][megapixels]; return <option key={megapixels} value={megapixels}>{width}×{height}</option> })}</select><div className="mt-1 text-[9px] text-zinc-600">{scene.resolution_megapixels.toFixed(1)} MP · derived from format</div></label><div className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">FPS</div><div className="mt-1 font-mono text-sm text-zinc-300">{scene.fps}</div><div className="mt-1 text-[9px] text-zinc-600">Fixed workflow value</div></div></>}
           <label className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Seed</div><input type="number" disabled={!scene} value={scene?.seed ?? 0} onChange={event => updateSceneLocally({ seed: Number(event.target.value) })} className="mt-1 w-full bg-transparent font-mono text-sm text-zinc-300 outline-none" /></label>
         </div>
         {!!scene?.render_versions.length && <div className="mt-5"><div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Render version</div><div className="mt-2 flex gap-2"><button aria-label="Previous version" disabled={activeVersionIndex <= 0} onClick={() => selectVersionAt(activeVersionIndex - 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronLeft className="h-4 w-4" /></button><select value={scene.selected_render_version_id ?? ''} onChange={event => void updateH3Scene(project!.id, scene.id, { selected_render_version_id: event.target.value }).then(replaceProject)} className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#11151c] px-3 py-3 text-sm text-zinc-300">{scene.render_versions.map(version => <option key={version.id} value={version.id}>v{String(version.number).padStart(3, '0')} · {new Date(version.created_at).toLocaleString()}</option>)}</select><button aria-label="Next version" disabled={activeVersionIndex < 0 || activeVersionIndex >= scene.render_versions.length - 1} onClick={() => selectVersionAt(activeVersionIndex + 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronRight className="h-4 w-4" /></button></div>{activeVersion && <div className="mt-2 rounded-lg bg-white/[0.025] p-2 text-[10px] leading-5 text-zinc-500"><div>{new Date(activeVersion.created_at).toLocaleString()} · {activeVersion.width}×{activeVersion.height} · {activeVersion.duration_seconds}s</div><div>Seed {activeVersion.seed} · Prompt ID {activeVersion.prompt_id}</div></div>}</div>}

@@ -9,6 +9,17 @@ from typing import Literal, NamedTuple, TypeAlias
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
 
 NonEmptyPrompt = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+H3AspectRatio = Literal[
+    "1:1 (Square)",
+    "16:9 (Widescreen)",
+    "9:16 (Portrait Widescreen)",
+]
+H3ResolutionMegapixels = Literal[0.4, 0.6, 0.8, 1.0]
+H3_RESOLUTION_PRESETS: dict[H3AspectRatio, dict[H3ResolutionMegapixels, tuple[int, int]]] = {
+    "1:1 (Square)": {0.4: (640, 640), 0.6: (800, 800), 0.8: (928, 928), 1.0: (1024, 1024)},
+    "16:9 (Widescreen)": {0.4: (864, 480), 0.6: (1056, 608), 0.8: (1216, 672), 1.0: (1376, 768)},
+    "9:16 (Portrait Widescreen)": {0.4: (480, 864), 0.6: (608, 1056), 0.8: (672, 1216), 1.0: (768, 1376)},
+}
 ModelCheckpointID = Literal[
     "ltx-2.3-22b-distilled",
     "ltx-2.3-22b-distilled-1.1",
@@ -119,6 +130,8 @@ class MiniMaxH3RenderRequest(BaseModel):
     prompt: NonEmptyPrompt
     input_image: str
     reference_fit: Literal["fill_crop", "fit", "stretch"] = "fill_crop"
+    aspect_ratio: H3AspectRatio = "1:1 (Square)"
+    resolution_megapixels: H3ResolutionMegapixels = 0.4
     seed: int = Field(ge=0, le=0xFFFFFFFFFFFFFFFF)
     width: int = Field(default=640, ge=1)
     height: int = Field(default=640, ge=1)
@@ -223,6 +236,8 @@ class H3Scene(BaseModel):
     prompt: str
     reference_image: str | None
     reference_fit: Literal["fill_crop", "fit", "stretch"] = "fill_crop"
+    aspect_ratio: H3AspectRatio = "1:1 (Square)"
+    resolution_megapixels: H3ResolutionMegapixels = 0.4
     width: int = Field(ge=1)
     height: int = Field(ge=1)
     fps: int = Field(ge=1)
@@ -278,7 +293,7 @@ class H3RenderRun(BaseModel):
 
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[6]
+    schema_version: Literal[8]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str
@@ -315,6 +330,8 @@ class H3SceneUpdateRequest(BaseModel):
     prompt: str | None = None
     reference_image: str | None = None
     reference_fit: Literal["fill_crop", "fit", "stretch"] | None = None
+    aspect_ratio: H3AspectRatio | None = None
+    resolution_megapixels: H3ResolutionMegapixels | None = None
     width: int | None = Field(default=None, ge=1)
     height: int | None = Field(default=None, ge=1)
     fps: int | None = Field(default=None, ge=1)

@@ -25,6 +25,7 @@ from PIL import Image
 
 from server_utils.loopback_url import require_loopback_http_url
 from services.comfyui_runtime_probe import ComfyUIRuntimeProbe
+from api_types import H3_RESOLUTION_PRESETS
 
 JsonObject = dict[str, Any]
 VERIFIED_WORKFLOW_SHA256 = "51febcadb3d33f2850f2a9ec905e16c34c8ac3d28d70b3fdbe6c228addc55030"
@@ -59,8 +60,10 @@ class HttpSession(Protocol):
 class SingleSceneRequest:
     prompt: str
     input_image: Path
-    reference_fit: str = "fill_crop"
     seed: int
+    reference_fit: str = "fill_crop"
+    aspect_ratio: str = "1:1 (Square)"
+    resolution_megapixels: float = 0.4
     width: int = VERIFIED_WIDTH
     height: int = VERIFIED_HEIGHT
     duration_seconds: float = VERIFIED_DURATION_SECONDS
@@ -85,7 +88,9 @@ def preprocess_reference_image(source: Path, width: int, height: int, fit: str) 
             else:
                 rendered = Image.new("RGB", (width, height), (18, 18, 18))
                 rendered.paste(resized, ((width - resized.width) // 2, (height - resized.height) // 2))
-        target = Path(tempfile.mkstemp(prefix="h3-reference-", suffix=".png")[1])
+        descriptor, target_name = tempfile.mkstemp(prefix="h3-reference-", suffix=".png")
+        os.close(descriptor)
+        target = Path(target_name)
         rendered.save(target, "PNG")
         return target
 
@@ -207,10 +212,16 @@ def build_prompt_payload(
 ) -> JsonObject:
     if not request.prompt.strip():
         raise ProviderError("A prompt is required.")
-    if (request.width, request.height) != (VERIFIED_WIDTH, VERIFIED_HEIGHT):
-        raise ProviderError("Only the verified 640x640 resolution is currently supported.")
-    if request.duration_seconds != VERIFIED_DURATION_SECONDS:
-        raise ProviderError("Only the verified 5 second duration is currently supported.")
+    presets = H3_RESOLUTION_PRESETS.get(request.aspect_ratio)
+    if presets is None:
+        raise ProviderError("The selected aspect-ratio preset is not verified.")
+    expected_dimensions = presets.get(request.resolution_megapixels)
+    if expected_dimensions is None:
+        raise ProviderError("The selected resolution preset is not verified.")
+    if (request.width, request.height) != expected_dimensions:
+        raise ProviderError("The selected aspect-ratio preset has incompatible dimensions.")
+    if request.duration_seconds <= 0:
+        raise ProviderError("Duration must be greater than zero.")
     if request.fps != VERIFIED_FPS:
         raise ProviderError("Only the verified 24 FPS rate is currently supported.")
     if request.seed < 0 or request.seed > 0xFFFFFFFFFFFFFFFF:
@@ -224,8 +235,8 @@ def build_prompt_payload(
     workflow["105:104"]["inputs"]["prompt"] = request.prompt.strip()
     workflow["114"]["inputs"]["image"] = staged_image_name.replace("\\", "/")
     workflow["105:15"]["inputs"]["noise_seed"] = request.seed
-    workflow["115"]["inputs"]["aspect_ratio"] = "1:1 (Square)"
-    workflow["115"]["inputs"]["megapixels"] = 0.4
+    workflow["115"]["inputs"]["aspect_ratio"] = request.aspect_ratio
+    workflow["115"]["inputs"]["megapixels"] = request.resolution_megapixels
     workflow["115"]["inputs"]["multiple"] = 32
     workflow["105:111"]["inputs"]["value"] = request.duration_seconds
     workflow["105:91"]["inputs"]["fps"] = request.fps
@@ -352,6 +363,9 @@ def create_immutable_render_version(
             "prompt_id": prompt_id,
             "prompt": request.prompt,
             "input_image_reference": str(request.input_image),
+            "aspect_ratio": request.aspect_ratio,
+            "resolution_megapixels": request.resolution_megapixels,
+            "reference_fit": request.reference_fit,
             "seed": request.seed,
             "width": request.width,
             "height": request.height,

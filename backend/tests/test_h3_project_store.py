@@ -55,6 +55,8 @@ def test_project_survives_store_restart_and_autosaved_scene_settings(tmp_path: P
     saved = store.update_scene(renamed.id, scene.id, H3SceneUpdateRequest(
         prompt="A real saved prompt",
         reference_image="C:\\local\\reference.jpg",
+        duration_seconds=10.0,
+        frame_count=255,
         seed=123,
         selected_render_version_id=None,
     ))
@@ -64,8 +66,29 @@ def test_project_survives_store_restart_and_autosaved_scene_settings(tmp_path: P
     assert reopened.scenes[0].prompt == "A real saved prompt"
     assert reopened.scenes[0].reference_image == "C:\\local\\reference.jpg"
     assert reopened.scenes[0].seed == 123
-    assert reopened.schema_version == 5
+    assert reopened.scenes[0].duration_seconds == 10.0
+    assert reopened.scenes[0].frame_count == 255
+    assert reopened.schema_version == 8
     assert reopened.scenes[0].storage_name == "scene_001"
+
+
+def test_aspect_ratio_and_resolution_preset_derive_dimensions_and_persist(tmp_path: Path) -> None:
+    store = H3ProjectStore(tmp_path / "Projects")
+    project = store.create_project("Formats")
+    scene = project.scenes[0]
+    saved = store.update_scene(project.id, scene.id, H3SceneUpdateRequest(
+        aspect_ratio="16:9 (Widescreen)", resolution_megapixels=0.8, reference_fit="fit", width=1, height=1,
+    ))
+    selected = saved.scenes[0]
+    assert selected.aspect_ratio == "16:9 (Widescreen)"
+    assert selected.reference_fit == "fit"
+    assert selected.resolution_megapixels == 0.8
+    assert (selected.width, selected.height) == (1216, 672)
+    reopened = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
+    assert reopened.scenes[0].aspect_ratio == "16:9 (Widescreen)"
+    assert reopened.scenes[0].reference_fit == "fit"
+    assert reopened.scenes[0].resolution_megapixels == 0.8
+    assert (reopened.scenes[0].width, reopened.scenes[0].height) == (1216, 672)
 
 
 def test_five_scene_project_operations_preserve_independent_data_and_storage(tmp_path: Path) -> None:
@@ -86,6 +109,7 @@ def test_five_scene_project_operations_preserve_independent_data_and_storage(tmp
     duplicate = project.scenes[-1]
     assert duplicate.prompt == "Second"
     assert duplicate.seed == 202
+    assert duplicate.aspect_ratio == second.aspect_ratio
     assert duplicate.render_versions == []
     assert duplicate.selected_render_version_id is None
     assert duplicate.storage_name == "scene_006"
@@ -117,11 +141,25 @@ def test_schema_one_project_migrates_atomically_without_data_loss(tmp_path: Path
 
     reopened = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
     migrated = json.loads(metadata.read_text(encoding="utf-8"))
-    assert reopened.schema_version == 5
+    assert reopened.schema_version == 8
     assert reopened.scenes[0].id == project.scenes[0].id
     assert reopened.scenes[0].storage_name == "scene_001"
-    assert migrated["schema_version"] == 5
+    assert migrated["schema_version"] == 8
     assert list(Path(project.project_root).glob(".project.json.*.tmp")) == []
+
+
+def test_v7_project_migrates_to_default_resolution_tier(tmp_path: Path) -> None:
+    store = H3ProjectStore(tmp_path / "Projects")
+    project = store.create_project("V7 migration")
+    metadata = Path(project.project_root) / "project.json"
+    payload = json.loads(metadata.read_text(encoding="utf-8"))
+    payload["schema_version"] = 7
+    payload["scenes"][0].pop("resolution_megapixels")
+    metadata.write_text(json.dumps(payload), encoding="utf-8")
+    reopened = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
+    assert reopened.schema_version == 8
+    assert reopened.scenes[0].resolution_megapixels == 0.4
+    assert (reopened.scenes[0].width, reopened.scenes[0].height) == (640, 640)
 
 
 def test_render_versions_are_appended_and_selected_without_overwrite(tmp_path: Path) -> None:

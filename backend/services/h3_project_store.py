@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from api_types import (
+    H3_RESOLUTION_PRESETS,
     H3Project,
     H3ProjectSettings,
     H3ContinuityArtifact,
@@ -103,7 +104,7 @@ class H3ProjectStore:
         if sequence_mode == "continuous_sequence":
             scenes = [scene.model_copy(update={"mode": "new_shot" if scene.order == 1 else "continue_previous"}) for scene in scenes]
         project = H3Project(
-            schema_version=6,
+            schema_version=8,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
@@ -163,9 +164,16 @@ class H3ProjectStore:
 
     def update_scene(self, project_id: str, scene_id: str, update: H3SceneUpdateRequest) -> H3Project:
         project = self.get_project(project_id)
+        target = next((scene for scene in project.scenes if scene.id == scene_id), None)
+        if target is None:
+            raise ProjectStoreError("The selected scene could not be found.")
         scenes: list[H3Scene] = []
         found = False
         changes = update.model_dump(exclude_none=True)
+        aspect_ratio = changes.get("aspect_ratio", target.aspect_ratio)
+        megapixels = changes.get("resolution_megapixels", target.resolution_megapixels)
+        if "aspect_ratio" in changes or "resolution_megapixels" in changes:
+            changes["width"], changes["height"] = H3_RESOLUTION_PRESETS[aspect_ratio][megapixels]
         for scene in project.scenes:
             if scene.id != scene_id:
                 scenes.append(scene)
@@ -366,6 +374,9 @@ class H3ProjectStore:
             name=f"{source.name} Copy" if source else f"Scene {order:02d}",
             prompt=source.prompt if source else "",
             reference_image=source.reference_image if source else None,
+            reference_fit=source.reference_fit if source else "fill_crop",
+            aspect_ratio=source.aspect_ratio if source else "1:1 (Square)",
+            resolution_megapixels=source.resolution_megapixels if source else 0.4,
             width=source.width if source else 640,
             height=source.height if source else 640,
             fps=source.fps if source else 24,
@@ -425,16 +436,18 @@ class H3ProjectStore:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             original_schema = payload.get("schema_version")
-            migrated = original_schema in {1, 2, 3, 4, 5}
+            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7}
             if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
             if migrated:
-                payload["schema_version"] = 6
+                payload["schema_version"] = 8
                 payload.setdefault("sequence_mode", "independent_shots")
                 for scene in payload.get("scenes", []):
                     scene.setdefault("mode", "new_shot")
                     scene.setdefault("reference_fit", "fill_crop")
+                    scene.setdefault("aspect_ratio", "1:1 (Square)")
+                    scene.setdefault("resolution_megapixels", 0.4)
                     scene.setdefault("continuity_strategy", "last_valid_frame")
                     scene.setdefault("continuity_offset_frames", 0)
                     scene.setdefault("selected_continuity_artifact_id", None)
