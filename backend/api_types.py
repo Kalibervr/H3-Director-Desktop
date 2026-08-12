@@ -15,6 +15,8 @@ H3AspectRatio = Literal[
     "9:16 (Portrait Widescreen)",
 ]
 H3ResolutionMegapixels = Literal[0.4, 0.6, 0.8, 1.0]
+H3WorkflowProfileId = Literal["minimax_h3_image_to_video"]
+H3WorkflowMode = Literal["image_to_video"]
 H3_RESOLUTION_PRESETS: dict[H3AspectRatio, dict[H3ResolutionMegapixels, tuple[int, int]]] = {
     "1:1 (Square)": {0.4: (640, 640), 0.6: (800, 800), 0.8: (928, 928), 1.0: (1024, 1024)},
     "16:9 (Widescreen)": {0.4: (864, 480), 0.6: (1056, 608), 0.8: (1216, 672), 1.0: (1376, 768)},
@@ -328,7 +330,7 @@ class H3RenderRun(BaseModel):
 
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[10]
+    schema_version: Literal[11]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str
@@ -336,6 +338,8 @@ class H3Project(BaseModel):
     project_root: str
     settings: H3ProjectSettings
     sequence_mode: Literal["independent_shots", "continuous_sequence"] = "independent_shots"
+    workflow_profile_id: H3WorkflowProfileId = "minimax_h3_image_to_video"
+    workflow_mode: H3WorkflowMode = "image_to_video"
     scenes: list[H3Scene]
     selected_scene_id: str
     render_runs: list[H3RenderRun]
@@ -346,12 +350,16 @@ class H3ProjectCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     scene_count: int = Field(default=1, ge=1, le=999)
     sequence_mode: Literal["independent_shots", "continuous_sequence"] = "independent_shots"
+    workflow_profile_id: H3WorkflowProfileId = "minimax_h3_image_to_video"
+    workflow_mode: H3WorkflowMode = "image_to_video"
 
 
 class H3ProjectUpdateRequest(BaseModel):
     model_config = ConfigDict(strict=True)
     name: str | None = Field(default=None, min_length=1, max_length=120)
     sequence_mode: Literal["independent_shots", "continuous_sequence"] | None = None
+    workflow_profile_id: H3WorkflowProfileId | None = None
+    workflow_mode: H3WorkflowMode | None = None
 
 
 class H3ProjectOpenRequest(BaseModel):
@@ -456,6 +464,18 @@ class H3PromptAssistantResponse(BaseModel):
     model: str
     vision_context: Literal["used", "not_available"]
     message: str
+
+
+class H3WorkflowProfileInstallRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+    folder: str = Field(min_length=1, max_length=4096)
+
+
+class H3WorkflowProfileInstallResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+    profile_id: str
+    version: str
+    installed_path: str
 
 
 class H3SequenceStartRequest(BaseModel):

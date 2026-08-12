@@ -26,6 +26,8 @@ from api_types import (
     H3PromptAssistantRequest,
     H3PromptAssistantResponse,
     H3PromptAssistantStatusResponse,
+    H3WorkflowProfileInstallRequest,
+    H3WorkflowProfileInstallResponse,
     H3Scene,
     H3SceneReorderRequest,
     H3SceneUpdateRequest,
@@ -50,6 +52,7 @@ from services.h3_sequence import H3SequenceCoordinator
 from services.h3_audio_guidance import H3AudioGuidance, compose_h3_prompt
 from services.h3_rtx_vsr_upscale import ComfyUIRtxVsrUpscaler
 from services.h3_ollama_prompt_assistant import OllamaPromptAssistant, OllamaPromptAssistantError
+from services.h3_workflow_profiles import WorkflowProfileError, WorkflowProfileRegistry, validate_profile_package
 
 
 @dataclass(frozen=True)
@@ -123,7 +126,7 @@ class ComfyUIMiniMaxH3Handler:
         return self._project_call(self._project_store.list_projects)
 
     def create_project(self, request: H3ProjectCreateRequest) -> H3Project:
-        return self._project_call(lambda: self._project_store.create_project(request.name, request.scene_count, request.sequence_mode))
+        return self._project_call(lambda: self._project_store.create_project(request.name, request.scene_count, request.sequence_mode, request.workflow_profile_id, request.workflow_mode))
 
     def get_project(self, project_id: str) -> H3Project:
         return self._project_call(lambda: self._project_store.get_project(project_id))
@@ -133,7 +136,7 @@ class ComfyUIMiniMaxH3Handler:
 
     def update_project(self, project_id: str, request: H3ProjectUpdateRequest) -> H3Project:
         return self._project_call(lambda: self._project_store.update_project(
-            project_id, name=request.name, sequence_mode=request.sequence_mode,
+            project_id, name=request.name, sequence_mode=request.sequence_mode, workflow_profile_id=request.workflow_profile_id, workflow_mode=request.workflow_mode,
         ))
 
     def update_scene(self, project_id: str, scene_id: str, request: H3SceneUpdateRequest) -> H3Project:
@@ -230,6 +233,17 @@ class ComfyUIMiniMaxH3Handler:
             )
         except (OllamaPromptAssistantError, ValueError) as exc:
             raise HTTPError(422, str(exc), code="H3_OLLAMA_PROMPT_ERROR") from exc
+
+    def install_workflow_profile(self, request: H3WorkflowProfileInstallRequest) -> H3WorkflowProfileInstallResponse:
+        """Copies only a validated declarative local package into H3 app data."""
+        try:
+            source = Path(request.folder)
+            profile = validate_profile_package(source)
+            root = Path(os.environ.get("LOCALAPPDATA", "")) / "H3 Director Desktop" / "workflow-profiles"
+            installed = WorkflowProfileRegistry(root).install(source)
+            return H3WorkflowProfileInstallResponse(profile_id=str(profile["id"]), version=str(profile["version"]), installed_path=str(installed))
+        except (WorkflowProfileError, OSError, ValueError) as exc:
+            raise HTTPError(422, str(exc) if isinstance(exc, WorkflowProfileError) else "The local workflow profile could not be installed safely.", code="H3_PROFILE_INSTALL_ERROR") from exc
 
     def prepare_continuity(self, project_id: str, scene_id: str) -> H3ContinuityPrepareResponse:
         try:

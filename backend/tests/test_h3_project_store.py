@@ -68,7 +68,7 @@ def test_project_survives_store_restart_and_autosaved_scene_settings(tmp_path: P
     assert reopened.scenes[0].seed == 123
     assert reopened.scenes[0].duration_seconds == 10.0
     assert reopened.scenes[0].frame_count == 255
-    assert reopened.schema_version == 9
+    assert reopened.schema_version == 11
     assert reopened.scenes[0].storage_name == "scene_001"
 
 
@@ -141,10 +141,12 @@ def test_schema_one_project_migrates_atomically_without_data_loss(tmp_path: Path
 
     reopened = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
     migrated = json.loads(metadata.read_text(encoding="utf-8"))
-    assert reopened.schema_version == 9
+    assert reopened.schema_version == 11
+    assert reopened.workflow_profile_id == "minimax_h3_image_to_video"
+    assert reopened.workflow_mode == "image_to_video"
     assert reopened.scenes[0].id == project.scenes[0].id
     assert reopened.scenes[0].storage_name == "scene_001"
-    assert migrated["schema_version"] == 9
+    assert migrated["schema_version"] == 11
     assert list(Path(project.project_root).glob(".project.json.*.tmp")) == []
 
 
@@ -157,7 +159,7 @@ def test_v7_project_migrates_to_default_resolution_tier(tmp_path: Path) -> None:
     payload["scenes"][0].pop("resolution_megapixels")
     metadata.write_text(json.dumps(payload), encoding="utf-8")
     reopened = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
-    assert reopened.schema_version == 9
+    assert reopened.schema_version == 11
     assert reopened.scenes[0].resolution_megapixels == 0.4
     assert (reopened.scenes[0].width, reopened.scenes[0].height) == (640, 640)
 
@@ -172,7 +174,7 @@ def test_v8_project_migrates_audio_defaults_and_duplicate_preserves_audio(tmp_pa
         payload["scenes"][0].pop(key)
     metadata.write_text(json.dumps(payload), encoding="utf-8")
     migrated = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
-    assert migrated.schema_version == 9
+    assert migrated.schema_version == 11
     scene = migrated.scenes[0]
     assert (scene.audio_mode, scene.no_speech, scene.no_music, scene.custom_audio_instruction) == ("natural_ambience", False, False, "")
     saved = store.update_scene(project.id, scene.id, H3SceneUpdateRequest(audio_mode="dialogue", no_music=True, custom_audio_instruction="distant rain"))

@@ -7,6 +7,8 @@ export type H3AudioMode = 'natural_ambience' | 'dialogue' | 'silent'
 export type H3AspectRatio = '1:1 (Square)' | '16:9 (Widescreen)' | '9:16 (Portrait Widescreen)'
 export type H3ResolutionMegapixels = 0.4 | 0.6 | 0.8 | 1
 export type H3SequenceMode = 'independent_shots' | 'continuous_sequence'
+export type H3WorkflowProfileId = 'minimax_h3_image_to_video'
+export type H3WorkflowMode = 'image_to_video'
 export type H3ContinuityStrategy = 'last_valid_frame' | 'offset_from_end'
 export type H3QueueState = 'waiting' | 'preparing' | 'rendering' | 'verifying' | 'complete' | 'failed' | 'skipped' | 'cancelled'
 
@@ -143,7 +145,7 @@ export interface H3Scene {
 }
 
 export interface H3Project {
-  schema_version: 10
+  schema_version: 11
   id: string
   name: string
   created_at: string
@@ -159,6 +161,8 @@ export interface H3Project {
   scenes: H3Scene[]
   selected_scene_id: string
   sequence_mode: H3SequenceMode
+  workflow_profile_id: H3WorkflowProfileId
+  workflow_mode: H3WorkflowMode
   render_runs: H3RenderRun[]
 }
 
@@ -175,9 +179,9 @@ export async function listH3Projects(): Promise<H3Project[]> {
   return readJson(await backendFetch('/api/comfyui/minimax-h3/projects'))
 }
 
-export async function createH3Project(name: string, sceneCount: number, sequenceMode: H3SequenceMode = 'independent_shots'): Promise<H3Project> {
+export async function createH3Project(name: string, sceneCount: number, sequenceMode: H3SequenceMode = 'independent_shots', workflowProfileId: H3WorkflowProfileId = 'minimax_h3_image_to_video', workflowMode: H3WorkflowMode = 'image_to_video'): Promise<H3Project> {
   return readJson(await backendFetch('/api/comfyui/minimax-h3/projects', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, scene_count: sceneCount, sequence_mode: sequenceMode }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, scene_count: sceneCount, sequence_mode: sequenceMode, workflow_profile_id: workflowProfileId, workflow_mode: workflowMode }),
   }))
 }
 
@@ -211,7 +215,7 @@ export async function getH3Project(projectId: string): Promise<H3Project> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}`))
 }
 
-export async function updateH3Project(projectId: string, update: Partial<Pick<H3Project, 'name' | 'sequence_mode'>>): Promise<H3Project> {
+export async function updateH3Project(projectId: string, update: Partial<Pick<H3Project, 'name' | 'sequence_mode' | 'workflow_profile_id' | 'workflow_mode'>>): Promise<H3Project> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(update),
   }))
@@ -244,6 +248,10 @@ export async function stopH3Sequence(projectId: string, runId: string): Promise<
 
 export async function getH3UpscaleAvailability(baseUrl: string): Promise<H3UpscaleAvailability> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/upscale/availability?base_url=${encodeURIComponent(baseUrl)}`))
+}
+
+export async function installH3WorkflowProfile(folder: string): Promise<{ profile_id: string; version: string; installed_path: string }> {
+  return readJson(await backendFetch('/api/comfyui/minimax-h3/workflow-profiles/install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder }) }))
 }
 
 export async function upscaleH3Render(projectId: string, sceneId: string, versionId: string, config: { baseUrl: string; inputDirectory: string; outputDirectory: string }): Promise<H3Project> {

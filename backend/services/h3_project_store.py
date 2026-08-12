@@ -94,7 +94,7 @@ class H3ProjectStore:
         self._recover_interrupted_runs = False
         return sorted(projects, key=lambda item: item.updated_at, reverse=True)
 
-    def create_project(self, name: str, scene_count: int = 1, sequence_mode: str = "independent_shots") -> H3Project:
+    def create_project(self, name: str, scene_count: int = 1, sequence_mode: str = "independent_shots", workflow_profile_id: str = "minimax_h3_image_to_video", workflow_mode: str = "image_to_video") -> H3Project:
         cleaned_name = name.strip()
         if not cleaned_name:
             raise ProjectStoreError("A project name is required.")
@@ -119,7 +119,7 @@ class H3ProjectStore:
         if sequence_mode == "continuous_sequence":
             scenes = [scene.model_copy(update={"mode": "new_shot" if scene.order == 1 else "continue_previous"}) for scene in scenes]
         project = H3Project(
-            schema_version=10,
+            schema_version=11,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
@@ -127,6 +127,8 @@ class H3ProjectStore:
             project_root=str(root),
             settings=H3ProjectSettings(width=640, height=640, fps=24, duration_seconds=5.0, frame_count=124),
             sequence_mode=sequence_mode,
+            workflow_profile_id=workflow_profile_id,
+            workflow_mode=workflow_mode,
             scenes=scenes,
             selected_scene_id=scenes[0].id,
             render_runs=[],
@@ -165,7 +167,7 @@ class H3ProjectStore:
         project = self.get_project(project_id)
         return self.save_project(project.model_copy(update={"name": cleaned}))
 
-    def update_project(self, project_id: str, *, name: str | None = None, sequence_mode: str | None = None) -> H3Project:
+    def update_project(self, project_id: str, *, name: str | None = None, sequence_mode: str | None = None, workflow_profile_id: str | None = None, workflow_mode: str | None = None) -> H3Project:
         project = self.get_project(project_id)
         changes: dict[str, str] = {}
         if name is not None:
@@ -175,6 +177,10 @@ class H3ProjectStore:
             changes["name"] = cleaned
         if sequence_mode is not None:
             changes["sequence_mode"] = sequence_mode
+        if workflow_profile_id is not None:
+            changes["workflow_profile_id"] = workflow_profile_id
+        if workflow_mode is not None:
+            changes["workflow_mode"] = workflow_mode
         return self.save_project(project.model_copy(update=changes))
 
     def update_scene(self, project_id: str, scene_id: str, update: H3SceneUpdateRequest) -> H3Project:
@@ -478,13 +484,15 @@ class H3ProjectStore:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             original_schema = payload.get("schema_version")
-            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9}
+            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
             if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
             if migrated:
-                payload["schema_version"] = 10
+                payload["schema_version"] = 11
                 payload.setdefault("sequence_mode", "independent_shots")
+                payload.setdefault("workflow_profile_id", "minimax_h3_image_to_video")
+                payload.setdefault("workflow_mode", "image_to_video")
                 for scene in payload.get("scenes", []):
                     scene.setdefault("mode", "new_shot")
                     scene.setdefault("reference_fit", "fill_crop")

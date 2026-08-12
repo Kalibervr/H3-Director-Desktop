@@ -17,6 +17,8 @@ from api_types import (
     H3PromptAssistantRequest,
     H3PromptAssistantResponse,
     H3PromptAssistantStatusResponse,
+    H3WorkflowProfileInstallRequest,
+    H3WorkflowProfileInstallResponse,
     H3SceneUpdateRequest,
     H3SceneReorderRequest,
     H3RenderRun,
@@ -60,6 +62,14 @@ def route_h3_prompt_assistant_improve(
     handler: AppHandler = Depends(get_state_service),
 ) -> H3PromptAssistantResponse:
     return handler.comfyui_minimax_h3.improve_prompt(request)
+
+
+@router.post("/workflow-profiles/install", response_model=H3WorkflowProfileInstallResponse)
+def route_h3_workflow_profile_install(
+    request: H3WorkflowProfileInstallRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3WorkflowProfileInstallResponse:
+    return handler.comfyui_minimax_h3.install_workflow_profile(request)
 
 
 @router.post("/render", response_model=MiniMaxH3RenderResponse)
