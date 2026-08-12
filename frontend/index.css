@@ -47,6 +47,7 @@ body {
   font-size: 14px;
   font-weight: 400;
   line-height: 1.45;
+  font-synthesis: none;
   overflow: hidden;
 }
 
@@ -66,15 +67,43 @@ samp,
   font-family: var(--technical-font);
 }
 
-/* Compact H3 labels need one step more contrast without changing the dark palette. */
+/* Compact H3 labels should read like desktop UI, not a terminal HUD. */
+.h3-director-ui .uppercase,
+.h3-editor-shell .uppercase {
+  font-weight: 500;
+  letter-spacing: 0.015em;
+  text-transform: none;
+}
+
+.h3-director-ui [class*="tracking-"]:not(.tracking-normal):not(.tracking-tight),
+.h3-editor-shell [class*="tracking-"]:not(.tracking-normal):not(.tracking-tight) {
+  letter-spacing: 0.015em;
+}
+
+.h3-director-ui .text-\[9px\],
+.h3-director-ui .text-\[10px\],
+.h3-director-ui .text-\[11px\],
+.h3-editor-shell .text-\[9px\],
+.h3-editor-shell .text-\[10px\],
+.h3-editor-shell .text-\[11px\] {
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+/* Keep secondary information visible on dark panels without redesigning colors. */
 .h3-director-ui .text-zinc-600,
 .h3-editor-shell .text-zinc-600 {
-  color: #9296a0;
+  color: #9da2ad;
 }
 
 .h3-director-ui .text-zinc-500,
 .h3-editor-shell .text-zinc-500 {
-  color: #a9adb6;
+  color: #b3b8c2;
+}
+
+.h3-director-ui .text-zinc-700,
+.h3-editor-shell .text-zinc-700 {
+  color: #858b97;
 }
 
 /* Custom scrollbar */

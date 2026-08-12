@@ -3,12 +3,12 @@ import type { H3Scene } from './h3-projects'
 export function composeH3AudioPrompt(scene: Pick<H3Scene, 'prompt' | 'audio_mode' | 'no_speech' | 'no_music' | 'custom_audio_instruction'>): string {
   const prompt = scene.prompt.trim()
   if (!prompt) return ''
-  if (scene.audio_mode === 'silent') return `${prompt} No speech, no voices, no music, no ambient sound.`
+  if (scene.audio_mode === 'silent') return `${prompt} No speech, no dialogue, no voices, no vocalizations, no music, no soundtrack, no background score, no singing, no musical elements, no ambient sound.`
   const parts = [prompt]
   if (scene.audio_mode === 'natural_ambience') parts.push('Natural environmental ambience appropriate to the scene.')
   if (scene.custom_audio_instruction.trim()) parts.push(scene.custom_audio_instruction.trim())
-  if (scene.no_speech) parts.push('No speech, no voices.')
-  if (scene.no_music) parts.push('No background music.')
+  if (scene.no_speech) parts.push('No speech, no dialogue, no voices, no vocalizations.')
+  if (scene.no_music) parts.push('No music, no soundtrack, no background score, no singing, no musical elements.')
   return parts.join(' ')
 }
 

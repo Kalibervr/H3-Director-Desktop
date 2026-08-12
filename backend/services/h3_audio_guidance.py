@@ -26,7 +26,7 @@ def compose_h3_prompt(original_prompt: str, guidance: H3AudioGuidance) -> str:
     custom = guidance.custom_instruction.strip()
     if guidance.mode == "silent":
         # Silence has deterministic precedence over every audio option and custom sound.
-        parts.append("No speech, no voices, no music, no ambient sound.")
+        parts.append("No speech, no dialogue, no voices, no vocalizations, no music, no soundtrack, no background score, no singing, no musical elements, no ambient sound.")
     else:
         if guidance.mode == "natural_ambience":
             parts.append("Natural environmental ambience appropriate to the scene.")
@@ -34,9 +34,9 @@ def compose_h3_prompt(original_prompt: str, guidance: H3AudioGuidance) -> str:
         if custom:
             parts.append(custom)
         if guidance.no_speech:
-            parts.append("No speech, no voices.")
+            parts.append("No speech, no dialogue, no voices, no vocalizations.")
         if guidance.no_music:
-            parts.append("No background music.")
+            parts.append("No music, no soundtrack, no background score, no singing, no musical elements.")
     return " ".join(parts)
 
 
