@@ -11,6 +11,7 @@ import { logger } from './logger'
 import { initSessionLog } from './logging-management'
 import { stopPythonBackend } from './python-backend'
 import { stopManagedComfyRuntimeOnExit } from './comfyui-runtime'
+import { autoStartOllamaRuntime, stopManagedOllamaRuntimeOnExit } from './ollama-runtime'
 import { createWindow, getMainWindow } from './window'
 
 function logAppVersion(): void {
@@ -61,6 +62,7 @@ if (!gotLock) {
       logger.error('[media-tools] Local FFmpeg capability is incomplete; media export/probing is blocked')
     }
     createWindow()
+    void autoStartOllamaRuntime()
     // Python setup + backend start are now driven by the renderer via IPC
 
   })
@@ -80,6 +82,7 @@ if (!gotLock) {
 
   app.on('before-quit', () => {
     stopManagedComfyRuntimeOnExit()
+    stopManagedOllamaRuntimeOnExit()
     stopExportProcess()
     stopPythonBackend()
   })

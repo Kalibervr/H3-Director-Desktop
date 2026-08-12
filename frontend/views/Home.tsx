@@ -11,7 +11,7 @@ import { buildH3EditorProject, getH3EditorUpdates, h3EditorProjectId, refreshH3E
 import { readProject, readProjectIds, writeProject, writeProjectIds } from '../lib/project-storage'
 import { getH3RuntimeStatus, type ComfyUIStatus } from '../lib/h3-generation'
 import { composeH3AudioPrompt, h3AudioSummary } from '../lib/h3-audio-guidance'
-import { localPromptAssistant } from '../lib/h3-prompt-assistant'
+import { getOllamaStatus, localPromptAssistant, OllamaH3PromptAssistant, type H3OllamaStatus } from '../lib/h3-prompt-assistant'
 import { H3_WORKFLOW_PROFILES } from '../lib/h3-workflow-profiles'
 import { RTX_VSR_SETUP_REQUIRED, createUpscaleVariantPlan } from '../lib/h3-upscale'
 import {
@@ -108,6 +108,7 @@ export function Home() {
   const [runtimeVersion, setRuntimeVersion] = useState<string | null>(null)
   const [runtimeError, setRuntimeError] = useState<string | null>(null)
   const [lifecycle, setLifecycle] = useState<Awaited<ReturnType<typeof window.electronAPI.getComfyRuntimeStatus>> | null>(null)
+  const [ollamaLifecycle, setOllamaLifecycle] = useState<Awaited<ReturnType<typeof window.electronAPI.getOllamaRuntimeStatus>> | null>(null)
   const [runtimeConfig, setRuntimeConfig] = useState<Awaited<ReturnType<typeof window.electronAPI.getComfyRuntimeConfig>> | null>(null)
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved')
   const [rendering, setRendering] = useState(false)
@@ -120,6 +121,8 @@ export function Home() {
   const [selectedUpscaleVariantId, setSelectedUpscaleVariantId] = useState<string | null>(null)
   const [promptAssistantMessage, setPromptAssistantMessage] = useState<string | null>(null)
   const [promptSuggestion, setPromptSuggestion] = useState<string | null>(null)
+  const [promptAssistantBusy, setPromptAssistantBusy] = useState(false)
+  const [ollamaStatus, setOllamaStatus] = useState<H3OllamaStatus | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
   const [clock, setClock] = useState(Date.now())
   const saveTimer = useRef<number | null>(null)
@@ -127,6 +130,7 @@ export function Home() {
   const pendingSave = useRef<{ projectId: string; sceneId: string; changes: Partial<H3Scene> } | null>(null)
   const scene = selectedScene(project)
   const managedBaseUrl = lifecycle?.endpoint ?? `http://127.0.0.1:${runtimeConfig?.port ?? 8190}`
+  const ollamaEndpoint = 'http://127.0.0.1:11434'
   const activeRun = project?.render_runs.find(run => run.status === 'running') ?? null
   const latestRun = activeRun ?? project?.render_runs.at(-1) ?? null
   const viewedRun = project?.render_runs.find(run => run.id === selectedRunId) ?? latestRun
@@ -205,7 +209,7 @@ export function Home() {
     if (!runtimeConfig) return
     setSaveState('saving')
     try {
-      const saved = await window.electronAPI.saveComfyRuntimeConfig({ config: runtimeConfig })
+      const saved = await window.electronAPI.saveComfyRuntimeConfig({ config: { ...runtimeConfig, ollamaEndpoint } })
       setRuntimeConfig(saved)
       setSaveState('saved')
     } catch (error) {
@@ -243,12 +247,13 @@ export function Home() {
     let active = true
     const refresh = async () => {
       try {
-        const [status, managed] = await Promise.all([getH3RuntimeStatus(managedBaseUrl), window.electronAPI.getComfyRuntimeStatus()])
+        const [status, managed, ollama] = await Promise.all([getH3RuntimeStatus(managedBaseUrl), window.electronAPI.getComfyRuntimeStatus(), window.electronAPI.getOllamaRuntimeStatus()])
         if (!active) return
         setRuntimeStatus(status.status)
         setRuntimeVersion(status.comfyui_version)
         setRuntimeError(status.errors[0] ?? null)
         setLifecycle(managed)
+        setOllamaLifecycle(ollama)
       } catch {
         if (active) {
           setRuntimeStatus('unavailable')
@@ -262,6 +267,11 @@ export function Home() {
     const interval = window.setInterval(() => void refresh(), 10_000)
     return () => { active = false; window.clearInterval(interval) }
   }, [managedBaseUrl])
+
+  useEffect(() => {
+    if (!runtimeConfig) return
+    void getOllamaStatus(ollamaEndpoint, runtimeConfig.ollamaModel).then(setOllamaStatus).catch(() => setOllamaStatus(null))
+  }, [runtimeConfig?.ollamaModel])
 
   useEffect(() => {
     if (!project || (!activeRun && (!scene || !ACTIVE_STATUSES.includes(scene.status)))) return
@@ -514,23 +524,37 @@ export function Home() {
     updateSceneLocally({ resolution_megapixels: resolutionMegapixels, width, height })
   }
   const improvePrompt = async () => {
-    if (!scene) return
-    const result = await localPromptAssistant.improve({
+    if (!scene || !project || promptAssistantBusy) return
+    setPromptAssistantBusy(true); setPromptAssistantMessage('Improving prompt…')
+    const context = {
       rawPrompt: scene.prompt,
+      sceneNumber: scene.order, sceneName: scene.name, projectName: project.name, sequenceMode: project.sequence_mode,
+      previousSceneNumber: sourceScene?.order, previousSceneName: sourceScene?.name,
       previousScenePrompt: sourceScene?.prompt,
+      previousFinalPrompt: sourceVersion?.final_prompt ?? undefined,
       mode: scene.mode,
       continuitySourceVersionId: sourceVersion?.id,
       aspectRatio: scene.aspect_ratio,
       width: scene.width,
       height: scene.height,
       durationSeconds: scene.duration_seconds,
+      fps: scene.fps,
       audioMode: scene.audio_mode,
       noSpeech: scene.no_speech,
       noMusic: scene.no_music,
+      customAudioInstruction: scene.custom_audio_instruction,
       continuityFramePath: continuityArtifact?.image_file,
-    })
-    setPromptAssistantMessage(result.message)
-    setPromptSuggestion(result.suggestion)
+      referenceImagePath: scene.reference_image ?? undefined,
+    }
+    try {
+      const canUseOllama = Boolean(runtimeConfig?.ollamaModel && ollamaStatus?.status === 'ready' && ollamaStatus.selected_model_available)
+      const result = await (canUseOllama ? new OllamaH3PromptAssistant(ollamaEndpoint, runtimeConfig!.ollamaModel!) : localPromptAssistant).improve(context)
+      setPromptAssistantMessage(result.provider === 'ollama' ? `${result.message} Vision context: ${result.visionContext === 'used' ? 'Used' : 'Not available'}.` : result.message)
+      setPromptSuggestion(result.suggestion)
+    } catch (error) {
+      setPromptAssistantMessage(`${error instanceof Error ? error.message : 'Local Ollama failed.'} Basic local suggestion is available.`)
+      setPromptSuggestion((await localPromptAssistant.improve(context)).suggestion)
+    } finally { setPromptAssistantBusy(false) }
   }
 
   return <div className="h3-director-ui h-screen overflow-hidden bg-[#07090d] text-zinc-100">
@@ -581,6 +605,8 @@ export function Home() {
           <label className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Seed</div><input type="number" disabled={!scene} value={scene?.seed ?? 0} onChange={event => updateSceneLocally({ seed: Number(event.target.value) })} className="mt-1 w-full bg-transparent font-mono text-sm text-zinc-300 outline-none" /></label>
         </div>
         {!!scene?.render_versions.length && <div className="mt-5"><div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Render version</div><div className="mt-2 flex gap-2"><button aria-label="Previous version" disabled={activeVersionIndex <= 0} onClick={() => selectVersionAt(activeVersionIndex - 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronLeft className="h-4 w-4" /></button><select value={scene.selected_render_version_id ?? ''} onChange={event => { setSelectedUpscaleVariantId(null); void updateH3Scene(project!.id, scene.id, { selected_render_version_id: event.target.value }).then(replaceProject) }} className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#11151c] px-3 py-3 text-sm text-zinc-300">{scene.render_versions.map(version => <option key={version.id} value={version.id}>v{String(version.number).padStart(3, '0')} · {new Date(version.created_at).toLocaleString()}</option>)}</select><button aria-label="Next version" disabled={activeVersionIndex < 0 || activeVersionIndex >= scene.render_versions.length - 1} onClick={() => selectVersionAt(activeVersionIndex + 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronRight className="h-4 w-4" /></button></div>{activeVersion && <div className="mt-2 rounded-lg bg-white/[0.025] p-2 text-[10px] leading-5 text-zinc-500"><div className="font-medium text-zinc-200">{activeUpscaleVariant ? 'RTX VSR 2× derived version' : 'Original render'}</div><div>{activeMedia?.width}×{activeMedia?.height} · {activeMedia?.duration_seconds}s · {activeMedia?.fps} FPS</div>{!activeUpscaleVariant && <div>Seed {activeVersion.seed} · Prompt ID {activeVersion.prompt_id}</div>}{activeVersion.upscale_variants.length > 0 && <div className="mt-2 rounded border border-emerald-400/15 bg-emerald-400/[0.04] p-2"><div className="text-emerald-200">RTX VSR 2× derived versions</div><div className="mt-1 flex flex-wrap gap-1"><button onClick={() => setSelectedUpscaleVariantId(null)} className={`rounded border px-2 py-1 ${!activeUpscaleVariant ? 'border-zinc-300/40 text-zinc-100' : 'border-white/10 text-zinc-400'}`}>Original</button>{activeVersion.upscale_variants.map(variant => <button key={variant.id} onClick={() => setSelectedUpscaleVariantId(variant.id)} className={`rounded border px-2 py-1 ${activeUpscaleVariant?.id === variant.id ? 'border-emerald-300/50 text-emerald-100' : 'border-white/10 text-zinc-400'}`}>RTX VSR 2× · v{String(variant.number).padStart(3, '0')}</button>)}</div></div>}<div className="mt-2 flex flex-wrap gap-2"><button onClick={() => setSelectedUpscaleVariantId(activeUpscaleVariant?.id ?? null)} className="rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-200">Preview</button><button onClick={() => void saveRenderCopy()} className="rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-200">Save Copy…</button><button onClick={() => void revealRender()} className="rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-200">Show in Folder</button><button onClick={() => openActiveMediaInEditor()} className="rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-200">Open in Editor</button>{!activeUpscaleVariant && <button disabled={!upscaleAvailability.available || upscaling} onClick={() => void upscaleActiveVersion()} className="rounded border border-amber-300/25 px-2 py-1 text-[10px] text-amber-200 disabled:opacity-40">{upscaling ? 'Upscaling…' : activeVersion.upscale_variants.some(variant => variant.backend === 'nvidia_rtx_vsr' && variant.scale === 2) ? 'Show RTX VSR 2×' : 'Upscale Video 2×'}</button>}</div><p className={`mt-2 text-[9px] ${upscaleAvailability.available ? 'text-emerald-200/80' : 'text-amber-200/80'}`}>RTX VSR: {activeUpscaleVariant ? 'Viewing immutable derived output. Original remains available.' : upscaleAvailability.available ? `${createUpscaleVariantPlan(activeVersion).sourceResolution} → ${createUpscaleVariantPlan(activeVersion).outputResolution}. Original preserved.` : upscaleAvailability.reason}</p></div>}</div>}
+        {runtimeConfig && <details className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs"><summary className="cursor-pointer font-semibold text-zinc-300">Prompt Assistant · Local Ollama</summary><p className={`mt-2 text-[10px] ${ollamaStatus?.status === 'ready' ? 'text-emerald-300' : 'text-amber-200'}`}>{ollamaStatus?.status === 'ready' && ollamaStatus.selected_model_available ? 'Local Ollama · Ready' : ollamaStatus?.status === 'model_not_installed' ? 'Model not installed' : 'Local Ollama · Not running'}</p><input value={runtimeConfig.ollamaEndpoint ?? 'http://127.0.0.1:11434'} onChange={event => setRuntimeConfig({ ...runtimeConfig, ollamaEndpoint: event.target.value })} placeholder="Local Ollama endpoint" className="mt-2 w-full rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><label className="mt-2 block text-[10px] text-zinc-500">Installed model<select value={runtimeConfig.ollamaModel ?? ''} onChange={event => setRuntimeConfig({ ...runtimeConfig, ollamaModel: event.target.value || undefined })} className="mt-1 w-full rounded border border-white/10 bg-[#11151c] px-2 py-1.5 text-xs text-zinc-200"><option value="">Choose local model</option>{ollamaStatus?.models.map(model => <option key={model.name} value={model.name}>{model.name}{model.vision_capable ? ' · vision' : ''}</option>)}</select></label><button type="button" onClick={() => void getOllamaStatus(runtimeConfig.ollamaEndpoint || 'http://127.0.0.1:11434', runtimeConfig.ollamaModel).then(setOllamaStatus).catch(() => setOllamaStatus(null))} className="mt-2 rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-300">Refresh models</button><p className="mt-2 text-[10px] text-zinc-500">Local only. No prompts, images, or project data leave this device.</p></details>}
+        {runtimeConfig && <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs"><div className="font-semibold text-zinc-300">Prompt Assistant</div><div className={`mt-1 text-[10px] ${ollamaLifecycle?.state === 'ready' ? 'text-emerald-300' : 'text-amber-200'}`}>{ollamaLifecycle?.state === 'ready' ? 'Ready · Local Ollama' : ollamaLifecycle?.state === 'starting' ? 'Starting…' : ollamaLifecycle?.state === 'not_installed' ? 'Not installed' : ollamaLifecycle?.state === 'failed' ? 'Failed' : 'Not running'}</div><div className="mt-1 text-[10px] text-zinc-500">{ollamaLifecycle?.state === 'ready' ? `${ollamaLifecycle.owned ? 'H3 managed' : 'External'} · Model: ${runtimeConfig.ollamaModel ?? 'none selected'}` : 'Local-only prompt suggestions remain available.'}</div>{ollamaLifecycle?.error && <p className="mt-2 text-[10px] text-red-300">{ollamaLifecycle.error}</p>}<details className="mt-3 border-t border-white/10 pt-3"><summary className="cursor-pointer text-[10px] font-semibold text-zinc-400">Advanced Prompt Assistant settings</summary><div className="mt-3 grid gap-2"><label className="flex items-center gap-2 text-[10px] text-zinc-400"><input type="checkbox" checked={Boolean(runtimeConfig.ollamaAutoStart)} onChange={event => setRuntimeConfig({ ...runtimeConfig, ollamaAutoStart: event.target.checked })} />Auto-start Ollama</label><div className="text-[10px] text-zinc-500">Endpoint: 127.0.0.1:11434 (loopback only)</div><div className="grid grid-cols-3 gap-2"><button onClick={() => void window.electronAPI.startOllamaRuntime().then(setOllamaLifecycle)} disabled={ollamaLifecycle?.state === 'starting' || ollamaLifecycle?.state === 'ready'} className="rounded border border-emerald-400/20 px-2 py-1.5 text-[10px] text-emerald-200 disabled:opacity-30">Start</button><button onClick={() => void window.electronAPI.stopOllamaRuntime().then(setOllamaLifecycle)} disabled={!ollamaLifecycle?.owned} className="rounded border border-red-400/20 px-2 py-1.5 text-[10px] text-red-200 disabled:opacity-30">Stop</button><button onClick={() => void window.electronAPI.restartOllamaRuntime().then(setOllamaLifecycle)} disabled={!ollamaLifecycle?.owned} className="rounded border border-amber-400/20 px-2 py-1.5 text-[10px] text-amber-200 disabled:opacity-30">Restart</button></div><button onClick={() => void saveRuntimeSettings()} className="rounded border border-white/10 px-2 py-1.5 text-[10px] text-zinc-300">Save Prompt Assistant settings</button>{ollamaLifecycle?.diagnostics.length ? <details className="font-mono text-[9px] text-zinc-500"><summary>Diagnostics</summary>{ollamaLifecycle.diagnostics.join('\n')}</details> : null}</div></details></div>}
         <details className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs"><summary className="cursor-pointer font-semibold text-zinc-300">Models</summary>{H3_WORKFLOW_PROFILES.map(profile => <div key={profile.id} className="mt-3"><div className="flex justify-between"><span>{profile.label}</span><span className={profile.status === 'verified' ? 'text-emerald-300' : 'text-amber-200'}>{profile.status === 'verified' ? 'Verified at runtime' : 'Setup required'}</span></div>{profile.reason && <p className="mt-1 text-[10px] text-zinc-500">{profile.reason}</p>}<div className="mt-1 text-[10px] text-zinc-500">{profile.requiredModels.length ? `${profile.requiredModels.length} declared local model files; no download source is configured.` : 'No manifest is declared until evidence is verified.'}</div></div>)}</details>
         {fileActionMessage && <p className="mt-3 text-[10px] text-zinc-400">{fileActionMessage}</p>}
         <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs"><div className="flex items-center justify-between"><div><div className="font-semibold text-zinc-300">Backend</div><div className="mt-1 text-[10px] text-zinc-500">{lifecycle?.state === 'ready' ? `Ready / ${lifecycle.owned ? 'H3 managed' : 'External'}` : lifecycle?.state.replace('_', ' ') ?? 'Checking'}{runtimeConfig ? ` / Sage: ${runtimeConfig.sageAttention ? 'On' : 'Off'}` : ''}</div></div><span className={`rounded-full px-2 py-1 text-[9px] uppercase ${lifecycle?.state === 'ready' ? 'bg-emerald-400/10 text-emerald-300' : lifecycle?.state === 'failed' || lifecycle?.state === 'incompatible' ? 'bg-red-400/10 text-red-300' : 'bg-amber-300/10 text-amber-200'}`}>{lifecycle?.state ?? 'checking'}</span></div>{(lifecycle?.error || (runtimeError && lifecycle?.state !== 'ready')) && <p className="mt-2 text-[10px] text-red-300">{lifecycle?.error ?? runtimeError}</p>}<details className="mt-3 border-t border-white/10 pt-3"><summary className="cursor-pointer text-[10px] font-semibold text-zinc-400">Advanced backend settings</summary>{runtimeConfig && <div className="mt-3 grid gap-2"><input value={runtimeConfig.rootPath} onChange={e => setRuntimeConfig({ ...runtimeConfig, rootPath: e.target.value })} placeholder="ComfyUI root" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><input value={runtimeConfig.pythonPath} onChange={e => setRuntimeConfig({ ...runtimeConfig, pythonPath: e.target.value })} placeholder="ComfyUI Python" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><label className="text-[10px] text-zinc-500">Port <input type="number" value={runtimeConfig.port} onChange={e => setRuntimeConfig({ ...runtimeConfig, port: Number(e.target.value) })} className="ml-2 w-16 rounded border border-white/10 bg-black/30 px-1 py-1 text-zinc-300" /></label><label className="flex items-center gap-2 text-[10px] text-zinc-500"><input type="checkbox" checked={runtimeConfig.autoLaunch} onChange={e => setRuntimeConfig({ ...runtimeConfig, autoLaunch: e.target.checked })} /> Auto-launch</label><input value={runtimeConfig.extraModelPathsConfig ?? ''} onChange={e => setRuntimeConfig({ ...runtimeConfig, extraModelPathsConfig: e.target.value })} placeholder="Extra model paths config" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><input value={runtimeConfig.inputDirectory ?? ''} onChange={e => setRuntimeConfig({ ...runtimeConfig, inputDirectory: e.target.value })} placeholder="ComfyUI input directory" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><input value={runtimeConfig.outputDirectory ?? ''} onChange={e => setRuntimeConfig({ ...runtimeConfig, outputDirectory: e.target.value })} placeholder="ComfyUI output directory" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><label className="flex items-center gap-2 text-[10px] text-zinc-500"><input type="checkbox" checked={Boolean(runtimeConfig.sageAttention)} onChange={e => setRuntimeConfig({ ...runtimeConfig, sageAttention: e.target.checked })} /> Sage Attention {lifecycle?.state === 'ready' ? '(Restart required)' : ''}</label><div className="grid grid-cols-2 gap-2"><button disabled={saveState === 'saving'} onClick={() => void saveRuntimeSettings()} className="rounded border border-white/10 px-2 py-1.5 text-[10px] disabled:opacity-40">{saveState === 'saving' ? 'Saving...' : 'Save runtime settings'}</button><button disabled={lifecycle?.state === 'starting' || lifecycle?.state === 'checking'} onClick={() => void startManagedRuntime()} className="rounded border border-emerald-400/20 px-2 py-1.5 text-[10px] text-emerald-200 disabled:opacity-40">{lifecycle?.state === 'starting' ? 'Starting...' : lifecycle?.state === 'checking' ? 'Checking...' : 'Start'}</button><button disabled={!lifecycle?.owned} onClick={() => void window.electronAPI.stopComfyRuntime().then(setLifecycle)} className="rounded border border-red-400/20 px-2 py-1.5 text-[10px] text-red-200 disabled:opacity-30">Stop</button><button disabled={!lifecycle?.owned} onClick={() => void window.electronAPI.restartComfyRuntime().then(setLifecycle)} className="rounded border border-amber-400/20 px-2 py-1.5 text-[10px] text-amber-200 disabled:opacity-30">Restart</button></div>{lifecycle?.diagnostics.length ? <details className="text-[10px] text-zinc-500"><summary className="cursor-pointer">Diagnostics</summary><div className="mt-1 font-mono">{lifecycle.diagnostics.join('\n')}</div></details> : null}</div>}</details></div>

@@ -23,6 +23,9 @@ from api_types import (
     H3UpscaleRequest,
     H3UpscaleVariant,
     H3UpscaleAvailabilityResponse,
+    H3PromptAssistantRequest,
+    H3PromptAssistantResponse,
+    H3PromptAssistantStatusResponse,
     H3Scene,
     H3SceneReorderRequest,
     H3SceneUpdateRequest,
@@ -46,6 +49,7 @@ from services.h3_continuity import ContinuityError, H3ContinuityExtractor, previ
 from services.h3_sequence import H3SequenceCoordinator
 from services.h3_audio_guidance import H3AudioGuidance, compose_h3_prompt
 from services.h3_rtx_vsr_upscale import ComfyUIRtxVsrUpscaler
+from services.h3_ollama_prompt_assistant import OllamaPromptAssistant, OllamaPromptAssistantError
 
 
 @dataclass(frozen=True)
@@ -213,6 +217,19 @@ class ComfyUIMiniMaxH3Handler:
             return H3UpscaleAvailabilityResponse(available=True, reason="NVIDIA RTX VSR is ready for verified 2× local video upscaling.")
         except (ValueError, requests.RequestException, json.JSONDecodeError):
             return H3UpscaleAvailabilityResponse(available=False, reason="The configured local ComfyUI runtime could not be checked for RTX VSR.")
+
+    def get_prompt_assistant_status(self, endpoint: str, selected_model: str | None) -> H3PromptAssistantStatusResponse:
+        return OllamaPromptAssistant().status(endpoint, selected_model)
+
+    def improve_prompt(self, request: H3PromptAssistantRequest) -> H3PromptAssistantResponse:
+        try:
+            result = OllamaPromptAssistant().improve(request)
+            return H3PromptAssistantResponse(
+                suggestion=result.suggestion, model=request.model, vision_context=result.vision_context,
+                message="AI-enhanced local suggestion from Local Ollama.",
+            )
+        except (OllamaPromptAssistantError, ValueError) as exc:
+            raise HTTPError(422, str(exc), code="H3_OLLAMA_PROMPT_ERROR") from exc
 
     def prepare_continuity(self, project_id: str, scene_id: str) -> H3ContinuityPrepareResponse:
         try:

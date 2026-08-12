@@ -14,6 +14,9 @@ from api_types import (
     H3ProjectUpdateRequest,
     H3UpscaleRequest,
     H3UpscaleAvailabilityResponse,
+    H3PromptAssistantRequest,
+    H3PromptAssistantResponse,
+    H3PromptAssistantStatusResponse,
     H3SceneUpdateRequest,
     H3SceneReorderRequest,
     H3RenderRun,
@@ -40,6 +43,23 @@ def route_h3_upscale_availability(
     base_url: str = Query(...), handler: AppHandler = Depends(get_state_service),
 ) -> H3UpscaleAvailabilityResponse:
     return handler.comfyui_minimax_h3.get_upscale_availability(base_url)
+
+
+@router.get("/prompt-assistant/status", response_model=H3PromptAssistantStatusResponse)
+def route_h3_prompt_assistant_status(
+    endpoint: str = Query(default="http://127.0.0.1:11434"),
+    selected_model: str | None = Query(default=None),
+    handler: AppHandler = Depends(get_state_service),
+) -> H3PromptAssistantStatusResponse:
+    return handler.comfyui_minimax_h3.get_prompt_assistant_status(endpoint, selected_model)
+
+
+@router.post("/prompt-assistant/improve", response_model=H3PromptAssistantResponse)
+def route_h3_prompt_assistant_improve(
+    request: H3PromptAssistantRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3PromptAssistantResponse:
+    return handler.comfyui_minimax_h3.improve_prompt(request)
 
 
 @router.post("/render", response_model=MiniMaxH3RenderResponse)

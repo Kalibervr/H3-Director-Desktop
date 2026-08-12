@@ -7,6 +7,7 @@ import { getBackendHealthStatus, getBackendUrl, getAuthToken, getAdminToken, sta
 import { getMainWindow } from '../window'
 import { handle } from './typed-handle'
 import { getComfyRuntimeConfig, getComfyRuntimeStatus, restartComfyRuntime, saveComfyRuntimeConfig, startComfyRuntime, stopComfyRuntime } from '../comfyui-runtime'
+import { getOllamaRuntimeConfig, getOllamaRuntimeStatus, restartOllamaRuntime, saveOllamaRuntimeConfig, startOllamaRuntime, stopOllamaRuntime } from '../ollama-runtime'
 
 function getModelsPath(): string {
   const modelsPath = path.join(app.getPath('userData'), 'models')
@@ -77,6 +78,12 @@ export function registerAppHandlers(): void {
   handle('startComfyRuntime', async () => await startComfyRuntime())
   handle('stopComfyRuntime', () => stopComfyRuntime())
   handle('restartComfyRuntime', async () => await restartComfyRuntime())
+  handle('getOllamaRuntimeConfig', () => getOllamaRuntimeConfig())
+  handle('saveOllamaRuntimeConfig', ({ config }) => saveOllamaRuntimeConfig(config))
+  handle('getOllamaRuntimeStatus', async () => await getOllamaRuntimeStatus())
+  handle('startOllamaRuntime', async () => await startOllamaRuntime())
+  handle('stopOllamaRuntime', () => stopOllamaRuntime())
+  handle('restartOllamaRuntime', async () => await restartOllamaRuntime())
 
   handle('getModelsPath', () => {
     return getModelsPath()

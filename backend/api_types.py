@@ -403,6 +403,61 @@ class H3UpscaleAvailabilityResponse(BaseModel):
     reason: str
 
 
+class H3OllamaModel(BaseModel):
+    model_config = ConfigDict(strict=True)
+    name: str
+    vision_capable: bool = False
+
+
+class H3PromptAssistantStatusResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+    status: Literal["ready", "not_running", "model_not_installed", "unavailable"]
+    endpoint: str
+    models: list[H3OllamaModel] = Field(default_factory=list)
+    selected_model: str | None = None
+    selected_model_available: bool = False
+    vision_capable: bool = False
+    message: str
+
+
+class H3PromptAssistantRequest(BaseModel):
+    """Local Ollama prompt-improvement request. Never accepts remote URLs."""
+    model_config = ConfigDict(strict=True)
+    endpoint: str = "http://127.0.0.1:11434"
+    model: str = Field(min_length=1, max_length=300)
+    raw_prompt: str = Field(min_length=1, max_length=12000)
+    scene_number: int = Field(ge=1)
+    scene_name: str = Field(min_length=1, max_length=120)
+    scene_mode: H3SceneMode
+    duration_seconds: float = Field(gt=0)
+    aspect_ratio: H3AspectRatio
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+    fps: int = Field(ge=1)
+    project_name: str = Field(min_length=1, max_length=120)
+    sequence_mode: Literal["independent_shots", "continuous_sequence"]
+    previous_scene_number: int | None = Field(default=None, ge=1)
+    previous_scene_name: str | None = Field(default=None, max_length=120)
+    previous_scene_prompt: str | None = Field(default=None, max_length=12000)
+    previous_final_prompt: str | None = Field(default=None, max_length=12000)
+    continuity_source_version_id: str | None = Field(default=None, max_length=120)
+    continuity_frame_path: str | None = Field(default=None, max_length=4096)
+    reference_image_path: str | None = Field(default=None, max_length=4096)
+    audio_mode: Literal["natural_ambience", "dialogue", "silent"]
+    no_speech: bool = False
+    no_music: bool = False
+    custom_audio_instruction: str = Field(default="", max_length=500)
+
+
+class H3PromptAssistantResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+    provider: Literal["ollama"] = "ollama"
+    suggestion: str
+    model: str
+    vision_context: Literal["used", "not_available"]
+    message: str
+
+
 class H3SequenceStartRequest(BaseModel):
     model_config = ConfigDict(strict=True)
     base_url: str = "http://127.0.0.1:8188"

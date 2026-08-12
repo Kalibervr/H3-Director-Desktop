@@ -65,8 +65,10 @@ const backendHealthStatus = z.object({
   status: z.enum(['alive', 'restarting', 'dead']),
   exitCode: z.number().nullable().optional(),
 })
-const comfyRuntimeConfig = z.object({ rootPath: z.string(), pythonPath: z.string(), port: z.number().int().min(1).max(65535), autoLaunch: z.boolean(), sageAttention: z.boolean().optional(), extraModelPathsConfig: z.string().optional(), inputDirectory: z.string().optional(), outputDirectory: z.string().optional() })
+const comfyRuntimeConfig = z.object({ rootPath: z.string(), pythonPath: z.string(), port: z.number().int().min(1).max(65535), autoLaunch: z.boolean(), sageAttention: z.boolean().optional(), extraModelPathsConfig: z.string().optional(), inputDirectory: z.string().optional(), outputDirectory: z.string().optional(), ollamaEndpoint: z.string().optional(), ollamaModel: z.string().optional(), ollamaAutoStart: z.boolean().optional() })
 const comfyRuntimeStatus = z.object({ state: z.enum(['not_configured', 'starting', 'checking', 'ready', 'incompatible', 'stopped', 'failed']), owned: z.boolean(), pid: z.number().nullable(), endpoint: z.string().nullable(), version: z.string().nullable(), error: z.string().nullable(), diagnostics: z.array(z.string()) })
+const ollamaRuntimeConfig = z.object({ autoStart: z.boolean(), endpoint: z.literal('http://127.0.0.1:11434'), model: z.string().optional() })
+const ollamaRuntimeStatus = z.object({ state: z.enum(['not_installed', 'starting', 'ready', 'not_running', 'failed']), owned: z.boolean(), pid: z.number().nullable(), endpoint: z.literal('http://127.0.0.1:11434'), executable: z.string().nullable(), error: z.string().nullable(), diagnostics: z.array(z.string()) })
 
 export type BackendHealthStatus = z.infer<typeof backendHealthStatus>
 
@@ -98,6 +100,12 @@ export const electronAPISchemas = {
   startComfyRuntime: { input: z.object({}), output: comfyRuntimeStatus },
   stopComfyRuntime: { input: z.object({}), output: comfyRuntimeStatus },
   restartComfyRuntime: { input: z.object({}), output: comfyRuntimeStatus },
+  getOllamaRuntimeConfig: { input: z.object({}), output: ollamaRuntimeConfig },
+  saveOllamaRuntimeConfig: { input: z.object({ config: ollamaRuntimeConfig }), output: ollamaRuntimeConfig },
+  getOllamaRuntimeStatus: { input: z.object({}), output: ollamaRuntimeStatus },
+  startOllamaRuntime: { input: z.object({}), output: ollamaRuntimeStatus },
+  stopOllamaRuntime: { input: z.object({}), output: ollamaRuntimeStatus },
+  restartOllamaRuntime: { input: z.object({}), output: ollamaRuntimeStatus },
 
   // First-run setup
   checkFirstRun: {
