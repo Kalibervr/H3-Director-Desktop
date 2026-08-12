@@ -19,6 +19,8 @@ from api_types import (
     H3PromptAssistantStatusResponse,
     H3WorkflowProfileInstallRequest,
     H3WorkflowProfileInstallResponse,
+    H3Ltx25ModelImportRequest,
+    H3Ltx25ModelImportResponse,
     H3SceneUpdateRequest,
     H3SceneReorderRequest,
     H3RenderRun,
@@ -70,6 +72,15 @@ def route_h3_workflow_profile_install(
     handler: AppHandler = Depends(get_state_service),
 ) -> H3WorkflowProfileInstallResponse:
     return handler.comfyui_minimax_h3.install_workflow_profile(request)
+
+
+@router.post("/ltx-2-5/models/import", response_model=H3Ltx25ModelImportResponse)
+def route_h3_ltx25_model_import(
+    request: H3Ltx25ModelImportRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3Ltx25ModelImportResponse:
+    """Manual local import only; this route never downloads or authenticates remotely."""
+    return handler.comfyui_minimax_h3.import_ltx25_models(request)
 
 
 @router.post("/render", response_model=MiniMaxH3RenderResponse)

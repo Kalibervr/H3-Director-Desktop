@@ -6,7 +6,7 @@ H3 Director profiles are declarative local packages. They describe a verified mo
 
 `minimax_h3_image_to_video` is the first verified profile. It retains the established MiniMax H3 Image-to-Video workflow, 1:1/16:9/9:16 resolution tiers, fixed 24 FPS, frame constraints, reference fit, audio guidance, continuity, editor provenance, and RTX VSR derived-output compatibility.
 
-Projects persist `workflow_profile_id` and `workflow_mode`. Schema 10 and older projects migrate atomically to schema 11 with `minimax_h3_image_to_video` / `image_to_video`; renders, continuity artifacts, editor links, and derived variants are unchanged.
+Projects persist `workflow_profile_id` and `workflow_mode`. Schema 10 and older projects migrate atomically through schema 11; schema 11 projects migrate atomically to schema 12 with `ltx_prompt_enhance=false`. Existing MiniMax projects remain `minimax_h3_image_to_video` / `image_to_video`; renders, continuity artifacts, editor links, and derived variants are unchanged.
 
 ## Package format
 
@@ -26,9 +26,11 @@ Entries declare stable ID, display name, role, expected filename, destination ca
 
 Before enabling a new model, verify its local license/distribution terms, local checkpoint files, API workflow and UI workflow, `/object_info` nodes, required custom-node versions, model manifests/checksums, GPU/VRAM needs, supported formats/resolution/FPS/duration, audio contract, output contract, and one real local render. Only then add its declarative profile and enable its declared modes.
 
-### LTX 2.5 checklist
+### LTX 2.5 status
 
-Future IDs may be `ltx_2_5_image_to_video` and `ltx_2_5_text_to_video`. Neither is installed or selectable today. H3 must not invent LTX 2.5 checkpoints, nodes, URLs, hardware needs, or license terms. It needs the full verification checklist above before its profile is marked ready.
+`ltx_2_5_image_to_video` has a captured, locally executed ComfyUI I2V template and one H3-originated verified render. Its exact distilled INT8 configuration is limited to 16:9 / 0.9 MP / 1280×704 output / 24 FPS / 5 seconds / 121 frames with native prompt enhancement, on the local RTX 5060 Ti 16 GB; the declarative workflow contract is in `docs/LTX_2_5_WORKFLOW_CONTRACT.md`. It is enabled only for that exact profile configuration.
+
+`ltx_2_5_text_to_video` remains unavailable. No installed T2V template or execution evidence has been captured.
 
 ### Turbo and LoRA variants
 

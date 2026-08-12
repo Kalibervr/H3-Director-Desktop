@@ -28,6 +28,8 @@ from api_types import (
     H3PromptAssistantStatusResponse,
     H3WorkflowProfileInstallRequest,
     H3WorkflowProfileInstallResponse,
+    H3Ltx25ModelImportRequest,
+    H3Ltx25ModelImportResponse,
     H3Scene,
     H3SceneReorderRequest,
     H3SceneUpdateRequest,
@@ -44,6 +46,7 @@ from services.comfyui_minimax_h3_provider import (
     SingleSceneRequest,
     load_verified_workflow,
 )
+from services.comfyui_ltx_2_5_provider import ComfyUILtx25I2VProvider, LtxI2VRequest
 from services.comfyui_runtime_probe import ComfyUIRuntimeProbe
 from server_utils.loopback_url import require_loopback_http_url
 from services.h3_project_store import H3ProjectStore, ProjectStoreError
@@ -53,6 +56,7 @@ from services.h3_audio_guidance import H3AudioGuidance, compose_h3_prompt
 from services.h3_rtx_vsr_upscale import ComfyUIRtxVsrUpscaler
 from services.h3_ollama_prompt_assistant import OllamaPromptAssistant, OllamaPromptAssistantError
 from services.h3_workflow_profiles import WorkflowProfileError, WorkflowProfileRegistry, validate_profile_package
+from services.h3_ltx_2_5_model_import import Ltx25ModelImportError, import_ltx25_assets, inspect_ltx25_assets, resolve_shared_model_root
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,15 @@ def resolve_h3_runtime_paths(render_root_override: Path | None = None) -> H3Runt
     ffprobe = _environment_path("H3_FFPROBE_PATH") or imageio_dir / "binaries" / ffprobe_name
     ffmpeg = _environment_path("H3_FFMPEG_PATH") or imageio_dir / "binaries" / ffmpeg_name
     return H3RuntimePaths(workflow, comfyui_output, render_root, ffprobe, ffmpeg)
+
+
+def resolve_ltx_i2v_runtime_paths(render_root_override: Path | None = None) -> H3RuntimePaths:
+    paths = resolve_h3_runtime_paths(render_root_override)
+    repository_or_resources_root = Path(__file__).resolve().parents[2]
+    workflow = _environment_path("H3_LTX_2_5_I2V_WORKFLOW_PATH") or (
+        repository_or_resources_root / "workflows" / "ltx_2_5_image_to_video_api.json"
+    )
+    return H3RuntimePaths(workflow, paths.comfyui_output, paths.render_root, paths.ffprobe, paths.ffmpeg)
 
 
 ProviderFactory = Callable[[H3RuntimePaths], ComfyUIMiniMaxH3Provider]
@@ -245,6 +258,18 @@ class ComfyUIMiniMaxH3Handler:
         except (WorkflowProfileError, OSError, ValueError) as exc:
             raise HTTPError(422, str(exc) if isinstance(exc, WorkflowProfileError) else "The local workflow profile could not be installed safely.", code="H3_PROFILE_INSTALL_ERROR") from exc
 
+    def import_ltx25_models(self, request: H3Ltx25ModelImportRequest) -> H3Ltx25ModelImportResponse:
+        """Validate/copy exact user-selected gated assets without any download path."""
+        try:
+            root = resolve_shared_model_root(request.shared_model_paths_config)
+            if request.file_paths:
+                assets, imported = import_ltx25_assets(root, request.file_paths)
+            else:
+                assets, imported = inspect_ltx25_assets(root), 0
+            return H3Ltx25ModelImportResponse(model_root=str(root), assets=assets, imported_count=imported)
+        except (Ltx25ModelImportError, OSError) as exc:
+            raise HTTPError(422, str(exc) if isinstance(exc, Ltx25ModelImportError) else "Downloaded model files could not be imported safely.", code="H3_LTX25_MODEL_IMPORT_ERROR") from exc
+
     def prepare_continuity(self, project_id: str, scene_id: str) -> H3ContinuityPrepareResponse:
         try:
             project = self._project_store.get_project(project_id)
@@ -259,6 +284,9 @@ class ComfyUIMiniMaxH3Handler:
             raise HTTPError(422, str(exc), code="H3_CONTINUITY_ERROR") from exc
 
     def start_sequence(self, project_id: str, request: H3SequenceStartRequest) -> H3RenderRun:
+        project = self._project_store.get_project(project_id)
+        if project.workflow_profile_id != "minimax_h3_image_to_video":
+            raise HTTPError(422, "This workflow profile is not verified for local rendering.", code="H3_PROFILE_NOT_READY")
         status = self.get_status(request.base_url)
         if status.status != "connected" or not status.workflow_contract_valid:
             message = status.errors[0] if status.errors else "The local ComfyUI runtime is unavailable or incompatible."
@@ -344,6 +372,10 @@ class ComfyUIMiniMaxH3Handler:
     ) -> H3Project:
         try:
             project = self._project_store.get_project(project_id)
+            if project.workflow_profile_id == "ltx_2_5_image_to_video":
+                return self._render_ltx_i2v_project_scene(project, scene_id, request)
+            if project.workflow_profile_id != "minimax_h3_image_to_video":
+                raise ProjectStoreError("This workflow profile is not verified for local rendering.")
             scene = next((item for item in project.scenes if item.id == scene_id), None)
             if scene is None:
                 raise ProjectStoreError("The selected scene could not be found.")
@@ -452,6 +484,58 @@ class ComfyUIMiniMaxH3Handler:
             except ProjectStoreError:
                 pass
             raise HTTPError(422, safe_error, code="MINIMAX_H3_RENDER_FAILED") from exc
+
+    def _render_ltx_i2v_project_scene(
+        self,
+        project: H3Project,
+        scene_id: str,
+        request: H3ProjectRenderRequest,
+    ) -> H3Project:
+        scene = next((item for item in project.scenes if item.id == scene_id), None)
+        if scene is None:
+            raise ProjectStoreError("The selected scene could not be found.")
+        if not scene.prompt.strip() or not scene.reference_image:
+            raise ProjectStoreError("LTX 2.5 Image-to-Video requires both a prompt and reference image.")
+        if (scene.aspect_ratio, scene.resolution_megapixels, scene.width, scene.height, scene.fps, scene.duration_seconds, scene.frame_count) != (
+            "16:9 (Widescreen)", 0.9, 1280, 704, 24, 5.0, 121,
+        ):
+            raise ProjectStoreError("Only the verified LTX 2.5 I2V 16:9 / 0.9 MP / 24 FPS / 5-second profile is enabled.")
+        scene_root = Path(project.project_root) / "scenes" / scene.storage_name
+        paths = resolve_ltx_i2v_runtime_paths(scene_root / "renders")
+        provider = ComfyUILtx25I2VProvider(
+            workflow_path=paths.workflow, output_root=paths.comfyui_output,
+            render_root=paths.render_root, ffprobe_path=paths.ffprobe,
+        )
+        self._project_store.set_scene_status(project.id, scene.id, "rendering", error=None, phase="Submitting LTX 2.5")
+        try:
+            result = provider.render(
+                base_url=request.base_url,
+                request=LtxI2VRequest(
+                    prompt=scene.prompt, input_image=Path(scene.reference_image), seed=scene.seed,
+                    prompt_enhance=scene.ltx_prompt_enhance, aspect_ratio=scene.aspect_ratio,
+                    resolution_megapixels=scene.resolution_megapixels, width=scene.width, height=scene.height,
+                    duration_seconds=scene.duration_seconds, fps=scene.fps, frame_count=scene.frame_count,
+                    output_filename_prefix=f"ltx_scene_{scene.order:03d}",
+                ),
+            )
+            payload = json.loads(result.metadata_file.read_text(encoding="utf-8"))
+            number = int(result.render_directory.name.removeprefix("v"))
+            version = H3RenderVersion(
+                id=result.render_directory.name, number=number, created_at=str(payload["created_at"]),
+                root=str(result.render_directory), video_file=str(result.output_file), metadata_file=str(result.metadata_file),
+                prompt=scene.prompt, final_prompt=scene.prompt, audio_mode="natural_ambience", no_speech=False,
+                no_music=False, custom_audio_instruction="", input_image_reference=str(scene.reference_image),
+                seed=scene.seed, width=scene.width, height=scene.height, fps=scene.fps,
+                duration_seconds=scene.duration_seconds, frame_count=result.video.frame_count, prompt_id=result.prompt_id,
+                input_image_sha256=str(payload["input_image_sha256"]), workflow_sha256=str(payload["workflow_sha256"]),
+                output_sha256=str(payload["output_sha256"]), ffprobe=MiniMaxH3VideoProbeResponse(**result.video.__dict__),
+            )
+            updated = self._project_store.add_render_version(project.id, scene.id, version)
+            return self._project_store.set_scene_status(updated.id, scene.id, "complete", error=None, phase="Complete")
+        except (ProviderError, ProjectStoreError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            safe_error = str(exc) if isinstance(exc, (ProviderError, ProjectStoreError)) else "The local LTX render could not be adopted safely."
+            self._project_store.set_scene_status(project.id, scene.id, "failed", error=safe_error, phase="Failed")
+            raise HTTPError(422, safe_error, code="LTX_2_5_I2V_RENDER_FAILED") from exc
 
     def _render_for_sequence(
         self,

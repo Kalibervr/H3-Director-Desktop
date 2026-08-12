@@ -5,10 +5,10 @@ export type H3SceneMode = 'new_shot' | 'continue_previous' | 'same_character_new
 export type H3ReferenceFit = 'fill_crop' | 'fit' | 'stretch'
 export type H3AudioMode = 'natural_ambience' | 'dialogue' | 'silent'
 export type H3AspectRatio = '1:1 (Square)' | '16:9 (Widescreen)' | '9:16 (Portrait Widescreen)'
-export type H3ResolutionMegapixels = 0.4 | 0.6 | 0.8 | 1
+export type H3ResolutionMegapixels = 0.4 | 0.6 | 0.8 | 0.9 | 1
 export type H3SequenceMode = 'independent_shots' | 'continuous_sequence'
-export type H3WorkflowProfileId = 'minimax_h3_image_to_video'
-export type H3WorkflowMode = 'image_to_video'
+export type H3WorkflowProfileId = 'minimax_h3_image_to_video' | 'ltx_2_5_text_to_video' | 'ltx_2_5_image_to_video'
+export type H3WorkflowMode = 'image_to_video' | 'text_to_video'
 export type H3ContinuityStrategy = 'last_valid_frame' | 'offset_from_end'
 export type H3QueueState = 'waiting' | 'preparing' | 'rendering' | 'verifying' | 'complete' | 'failed' | 'skipped' | 'cancelled'
 
@@ -120,6 +120,7 @@ export interface H3Scene {
   custom_audio_instruction: string
   reference_image: string | null
   reference_fit: H3ReferenceFit
+  ltx_prompt_enhance: boolean
   aspect_ratio: H3AspectRatio
   resolution_megapixels: H3ResolutionMegapixels
   width: number
@@ -145,7 +146,7 @@ export interface H3Scene {
 }
 
 export interface H3Project {
-  schema_version: 11
+  schema_version: 12
   id: string
   name: string
   created_at: string
@@ -223,7 +224,7 @@ export async function updateH3Project(projectId: string, update: Partial<Pick<H3
 
 export const renameH3Project = (projectId: string, name: string) => updateH3Project(projectId, { name })
 
-export async function updateH3Scene(projectId: string, sceneId: string, update: Partial<Pick<H3Scene, 'name' | 'prompt' | 'audio_mode' | 'no_speech' | 'no_music' | 'custom_audio_instruction' | 'reference_image' | 'reference_fit' | 'aspect_ratio' | 'resolution_megapixels' | 'width' | 'height' | 'fps' | 'duration_seconds' | 'frame_count' | 'seed' | 'selected_render_version_id' | 'mode' | 'continuity_strategy' | 'continuity_offset_frames'>>): Promise<H3Project> {
+export async function updateH3Scene(projectId: string, sceneId: string, update: Partial<Pick<H3Scene, 'name' | 'prompt' | 'audio_mode' | 'no_speech' | 'no_music' | 'custom_audio_instruction' | 'reference_image' | 'reference_fit' | 'ltx_prompt_enhance' | 'aspect_ratio' | 'resolution_megapixels' | 'width' | 'height' | 'fps' | 'duration_seconds' | 'frame_count' | 'seed' | 'selected_render_version_id' | 'mode' | 'continuity_strategy' | 'continuity_offset_frames'>>): Promise<H3Project> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(update),
   }))
@@ -252,6 +253,13 @@ export async function getH3UpscaleAvailability(baseUrl: string): Promise<H3Upsca
 
 export async function installH3WorkflowProfile(folder: string): Promise<{ profile_id: string; version: string; installed_path: string }> {
   return readJson(await backendFetch('/api/comfyui/minimax-h3/workflow-profiles/install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ folder }) }))
+}
+
+export type H3Ltx25AssetState = 'found' | 'missing' | 'duplicate' | 'unknown' | 'wrong_filename' | 'wrong_destination'
+export interface H3Ltx25ModelAssetStatus { filename: string; destination_category: string | null; required: boolean; state: H3Ltx25AssetState; file_size_bytes: number | null; message: string }
+export interface H3Ltx25ModelImportResult { model_root: string | null; assets: H3Ltx25ModelAssetStatus[]; imported_count: number; checksum_verified: false }
+export async function importH3Ltx25Models(filePaths: string[], sharedModelPathsConfig: string): Promise<H3Ltx25ModelImportResult> {
+  return readJson(await backendFetch('/api/comfyui/minimax-h3/ltx-2-5/models/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_paths: filePaths, shared_model_paths_config: sharedModelPathsConfig }) }))
 }
 
 export async function upscaleH3Render(projectId: string, sceneId: string, versionId: string, config: { baseUrl: string; inputDirectory: string; outputDirectory: string }): Promise<H3Project> {

@@ -68,7 +68,7 @@ def test_project_survives_store_restart_and_autosaved_scene_settings(tmp_path: P
     assert reopened.scenes[0].seed == 123
     assert reopened.scenes[0].duration_seconds == 10.0
     assert reopened.scenes[0].frame_count == 255
-    assert reopened.schema_version == 11
+    assert reopened.schema_version == 12
     assert reopened.scenes[0].storage_name == "scene_001"
 
 
@@ -141,12 +141,12 @@ def test_schema_one_project_migrates_atomically_without_data_loss(tmp_path: Path
 
     reopened = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
     migrated = json.loads(metadata.read_text(encoding="utf-8"))
-    assert reopened.schema_version == 11
+    assert reopened.schema_version == 12
     assert reopened.workflow_profile_id == "minimax_h3_image_to_video"
     assert reopened.workflow_mode == "image_to_video"
     assert reopened.scenes[0].id == project.scenes[0].id
     assert reopened.scenes[0].storage_name == "scene_001"
-    assert migrated["schema_version"] == 11
+    assert migrated["schema_version"] == 12
     assert list(Path(project.project_root).glob(".project.json.*.tmp")) == []
 
 
@@ -159,7 +159,7 @@ def test_v7_project_migrates_to_default_resolution_tier(tmp_path: Path) -> None:
     payload["scenes"][0].pop("resolution_megapixels")
     metadata.write_text(json.dumps(payload), encoding="utf-8")
     reopened = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
-    assert reopened.schema_version == 11
+    assert reopened.schema_version == 12
     assert reopened.scenes[0].resolution_megapixels == 0.4
     assert (reopened.scenes[0].width, reopened.scenes[0].height) == (640, 640)
 
@@ -174,12 +174,33 @@ def test_v8_project_migrates_audio_defaults_and_duplicate_preserves_audio(tmp_pa
         payload["scenes"][0].pop(key)
     metadata.write_text(json.dumps(payload), encoding="utf-8")
     migrated = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
-    assert migrated.schema_version == 11
+    assert migrated.schema_version == 12
     scene = migrated.scenes[0]
     assert (scene.audio_mode, scene.no_speech, scene.no_music, scene.custom_audio_instruction) == ("natural_ambience", False, False, "")
     saved = store.update_scene(project.id, scene.id, H3SceneUpdateRequest(audio_mode="dialogue", no_music=True, custom_audio_instruction="distant rain"))
     duplicate = store.duplicate_scene(saved.id, scene.id).scenes[-1]
     assert (duplicate.audio_mode, duplicate.no_music, duplicate.custom_audio_instruction) == ("dialogue", True, "distant rain")
+
+
+def test_v11_project_migrates_ltx_prompt_enhance_and_ltx_creation_uses_captured_settings(tmp_path: Path) -> None:
+    store = H3ProjectStore(tmp_path / "Projects")
+    project = store.create_project("V11 migration")
+    metadata = Path(project.project_root) / "project.json"
+    payload = json.loads(metadata.read_text(encoding="utf-8"))
+    payload["schema_version"] = 11
+    payload["scenes"][0].pop("ltx_prompt_enhance")
+    metadata.write_text(json.dumps(payload), encoding="utf-8")
+
+    migrated = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
+    assert migrated.schema_version == 12
+    assert migrated.scenes[0].ltx_prompt_enhance is False
+
+    ltx = store.create_project("LTX I2V", workflow_profile_id="ltx_2_5_image_to_video")
+    scene = ltx.scenes[0]
+    assert (scene.aspect_ratio, scene.resolution_megapixels, scene.width, scene.height, scene.fps, scene.frame_count) == (
+        "16:9 (Widescreen)", 0.9, 1280, 704, 24, 121,
+    )
+    assert scene.ltx_prompt_enhance is True
 
 
 def test_render_versions_are_appended_and_selected_without_overwrite(tmp_path: Path) -> None:

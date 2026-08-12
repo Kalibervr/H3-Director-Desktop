@@ -116,10 +116,23 @@ class H3ProjectStore:
             raise ProjectStoreError("The local project folder could not be created.") from exc
         timestamp = _now()
         scenes = [self._new_scene(number, _scene_storage_name(number)) for number in range(1, scene_count + 1)]
+        if workflow_profile_id == "ltx_2_5_image_to_video":
+            # This is the sole locally executed LTX 2.5 configuration captured in
+            # the workflow contract.  It is persisted for profile-driven editing;
+            # rendering remains blocked until an H3 provider binding is verified.
+            scenes = [scene.model_copy(update={
+                "aspect_ratio": "16:9 (Widescreen)",
+                "resolution_megapixels": 0.9,
+                "width": 1280,
+                "height": 704,
+                "fps": 24,
+                "frame_count": 121,
+                "ltx_prompt_enhance": True,
+            }) for scene in scenes]
         if sequence_mode == "continuous_sequence":
             scenes = [scene.model_copy(update={"mode": "new_shot" if scene.order == 1 else "continue_previous"}) for scene in scenes]
         project = H3Project(
-            schema_version=11,
+            schema_version=12,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
@@ -423,6 +436,7 @@ class H3ProjectStore:
             custom_audio_instruction=source.custom_audio_instruction if source else "",
             reference_image=source.reference_image if source else None,
             reference_fit=source.reference_fit if source else "fill_crop",
+            ltx_prompt_enhance=source.ltx_prompt_enhance if source else False,
             aspect_ratio=source.aspect_ratio if source else "1:1 (Square)",
             resolution_megapixels=source.resolution_megapixels if source else 0.4,
             width=source.width if source else 640,
@@ -484,18 +498,19 @@ class H3ProjectStore:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             original_schema = payload.get("schema_version")
-            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
             if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
             if migrated:
-                payload["schema_version"] = 11
+                payload["schema_version"] = 12
                 payload.setdefault("sequence_mode", "independent_shots")
                 payload.setdefault("workflow_profile_id", "minimax_h3_image_to_video")
                 payload.setdefault("workflow_mode", "image_to_video")
                 for scene in payload.get("scenes", []):
                     scene.setdefault("mode", "new_shot")
                     scene.setdefault("reference_fit", "fill_crop")
+                    scene.setdefault("ltx_prompt_enhance", False)
                     scene.setdefault("audio_mode", "natural_ambience")
                     scene.setdefault("no_speech", False)
                     scene.setdefault("no_music", False)
