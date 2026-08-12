@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, TypeVar
 
 import imageio_ffmpeg
+import requests
 
 from _routes._errors import HTTPError
 from api_types import (
@@ -19,6 +20,9 @@ from api_types import (
     H3ProjectRenderRequest,
     H3ProjectUpdateRequest,
     H3RenderVersion,
+    H3UpscaleRequest,
+    H3UpscaleVariant,
+    H3UpscaleAvailabilityResponse,
     H3Scene,
     H3SceneReorderRequest,
     H3SceneUpdateRequest,
@@ -36,10 +40,12 @@ from services.comfyui_minimax_h3_provider import (
     load_verified_workflow,
 )
 from services.comfyui_runtime_probe import ComfyUIRuntimeProbe
+from server_utils.loopback_url import require_loopback_http_url
 from services.h3_project_store import H3ProjectStore, ProjectStoreError
 from services.h3_continuity import ContinuityError, H3ContinuityExtractor, previous_scene, selected_completed_version
 from services.h3_sequence import H3SequenceCoordinator
 from services.h3_audio_guidance import H3AudioGuidance, compose_h3_prompt
+from services.h3_rtx_vsr_upscale import ComfyUIRtxVsrUpscaler
 
 
 @dataclass(frozen=True)
@@ -143,6 +149,70 @@ class ComfyUIMiniMaxH3Handler:
 
     def reorder_scenes(self, project_id: str, request: H3SceneReorderRequest) -> H3Project:
         return self._project_call(lambda: self._project_store.reorder_scenes(project_id, request.scene_ids))
+
+    def upscale_project_render(
+        self, project_id: str, scene_id: str, source_version_id: str, request: H3UpscaleRequest,
+    ) -> H3Project:
+        """Create one project-owned immutable 2x RTX VSR derivative."""
+        try:
+            project = self._project_store.get_project(project_id)
+            scene = next((item for item in project.scenes if item.id == scene_id), None)
+            if scene is None:
+                raise ProjectStoreError("The selected scene could not be found.")
+            source = next((item for item in scene.render_versions if item.id == source_version_id), None)
+            if source is None:
+                raise ProjectStoreError("The selected source render version could not be found.")
+            if any(item.backend == "nvidia_rtx_vsr" and item.scale == 2 for item in source.upscale_variants):
+                raise ProjectStoreError("An immutable RTX VSR 2× version already exists for this source render.")
+            project_root = Path(project.project_root).resolve()
+            source_file = Path(source.video_file).resolve()
+            source_root = Path(source.root).resolve()
+            try:
+                source_file.relative_to(project_root)
+                source_root.relative_to(project_root)
+            except ValueError as exc:
+                raise ProjectStoreError("The source render is outside the app-owned project.") from exc
+            paths = resolve_h3_runtime_paths()
+            result = ComfyUIRtxVsrUpscaler(
+                input_root=Path(request.input_directory), output_root=Path(request.output_directory),
+                ffprobe_path=paths.ffprobe,
+            ).upscale_2x(
+                base_url=request.base_url, source_video=source_file,
+                destination_root=source_root / "derived" / "nvidia_rtx_vsr",
+            )
+            metadata = json.loads(result.metadata_file.read_text(encoding="utf-8"))
+            variant = H3UpscaleVariant(
+                id=result.output_file.parent.name, number=int(result.output_file.parent.name.removeprefix("v")),
+                created_at=str(metadata["created_at"]), root=str(result.output_file.parent),
+                video_file=str(result.output_file), metadata_file=str(result.metadata_file),
+                backend="nvidia_rtx_vsr", source_render_version_id=source.id,
+                source_width=source.width, source_height=source.height,
+                width=result.video.width, height=result.video.height, scale=2,
+                fps=source.fps, duration_seconds=result.video.duration_seconds,
+                audio_preserved=result.video.audio_present, prompt_id=result.prompt_id,
+                source_video_sha256=result.source_video_sha256, output_sha256=result.output_sha256,
+                ffprobe=MiniMaxH3VideoProbeResponse(**result.video.__dict__),
+            )
+            return self._project_store.add_upscale_variant(project_id, scene_id, source.id, variant)
+        except (ProviderError, ProjectStoreError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            message = str(exc) if isinstance(exc, (ProviderError, ProjectStoreError)) else "The RTX VSR result could not be persisted safely."
+            raise HTTPError(422, message, code="RTX_VSR_UPSCALE_FAILED") from exc
+
+    def get_upscale_availability(self, base_url: str) -> H3UpscaleAvailabilityResponse:
+        """Read-only contract check; runtime execution remains the final authority."""
+        try:
+            base_url = require_loopback_http_url(base_url)
+            response = requests.get(f"{base_url}/object_info", timeout=10, allow_redirects=False)
+            payload = response.json()
+            resize = payload.get("ImageResizeKJv2") if isinstance(payload, dict) else None
+            load = payload.get("VHS_LoadVideo") if isinstance(payload, dict) else None
+            combine = payload.get("VHS_VideoCombine") if isinstance(payload, dict) else None
+            methods = resize.get("input", {}).get("required", {}).get("upscale_method", [[]])[0] if isinstance(resize, dict) else []
+            if not (isinstance(methods, list) and "nvidia_rtx_vsr" in methods and isinstance(load, dict) and isinstance(combine, dict)):
+                return H3UpscaleAvailabilityResponse(available=False, reason="Local RTX VSR video nodes are unavailable in the configured ComfyUI runtime.")
+            return H3UpscaleAvailabilityResponse(available=True, reason="NVIDIA RTX VSR is ready for verified 2× local video upscaling.")
+        except (ValueError, requests.RequestException, json.JSONDecodeError):
+            return H3UpscaleAvailabilityResponse(available=False, reason="The configured local ComfyUI runtime could not be checked for RTX VSR.")
 
     def prepare_continuity(self, project_id: str, scene_id: str) -> H3ContinuityPrepareResponse:
         try:

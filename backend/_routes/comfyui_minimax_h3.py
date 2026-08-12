@@ -12,6 +12,8 @@ from api_types import (
     H3ProjectOpenRequest,
     H3ProjectRenderRequest,
     H3ProjectUpdateRequest,
+    H3UpscaleRequest,
+    H3UpscaleAvailabilityResponse,
     H3SceneUpdateRequest,
     H3SceneReorderRequest,
     H3RenderRun,
@@ -31,6 +33,13 @@ def route_minimax_h3_status(
     handler: AppHandler = Depends(get_state_service),
 ) -> ComfyUIProbeResponse:
     return handler.comfyui_minimax_h3.get_status(base_url)
+
+
+@router.get("/upscale/availability", response_model=H3UpscaleAvailabilityResponse)
+def route_h3_upscale_availability(
+    base_url: str = Query(...), handler: AppHandler = Depends(get_state_service),
+) -> H3UpscaleAvailabilityResponse:
+    return handler.comfyui_minimax_h3.get_upscale_availability(base_url)
 
 
 @router.post("/render", response_model=MiniMaxH3RenderResponse)
@@ -141,6 +150,14 @@ def route_h3_scene_render(
     handler: AppHandler = Depends(get_state_service),
 ) -> H3Project:
     return handler.comfyui_minimax_h3.render_project_scene(project_id, scene_id, request)
+
+
+@router.post("/projects/{project_id}/scenes/{scene_id}/renders/{source_version_id}/upscale", response_model=H3Project)
+def route_h3_render_upscale(
+    project_id: str, scene_id: str, source_version_id: str, request: H3UpscaleRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3Project:
+    return handler.comfyui_minimax_h3.upscale_project_render(project_id, scene_id, source_version_id, request)
 
 
 @router.post(

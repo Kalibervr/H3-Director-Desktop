@@ -26,6 +26,8 @@ import {
   updateH3Project,
   startH3Sequence,
   stopH3Sequence,
+  getH3UpscaleAvailability,
+  upscaleH3Render,
   reorderH3Scenes,
   selectH3Scene,
   updateH3Scene,
@@ -36,6 +38,7 @@ import {
   type H3ResolutionMegapixels,
   type H3SequenceMode,
   type H3RenderRun,
+  type H3UpscaleAvailability,
 } from '../lib/h3-projects'
 
 const ACTIVE_STATUSES: H3SceneStatus[] = ['queued', 'preparing', 'submitted', 'rendering', 'encoding', 'verifying']
@@ -112,6 +115,9 @@ export function Home() {
   const [sequenceStarting, setSequenceStarting] = useState(false)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const [fileActionMessage, setFileActionMessage] = useState<string | null>(null)
+  const [upscaleAvailability, setUpscaleAvailability] = useState<H3UpscaleAvailability>(RTX_VSR_SETUP_REQUIRED)
+  const [upscaling, setUpscaling] = useState(false)
+  const [selectedUpscaleVariantId, setSelectedUpscaleVariantId] = useState<string | null>(null)
   const [promptAssistantMessage, setPromptAssistantMessage] = useState<string | null>(null)
   const [promptSuggestion, setPromptSuggestion] = useState<string | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null)
@@ -127,6 +133,29 @@ export function Home() {
   const existingEditorProject = project ? readProject(h3EditorProjectId(project.id)) : null
   const editorUpdates = project && existingEditorProject ? getH3EditorUpdates(project, existingEditorProject) : []
 
+  useEffect(() => {
+    if (lifecycle?.state !== 'ready') { setUpscaleAvailability(RTX_VSR_SETUP_REQUIRED); return }
+    void getH3UpscaleAvailability(managedBaseUrl).then(setUpscaleAvailability).catch(() => setUpscaleAvailability(RTX_VSR_SETUP_REQUIRED))
+  }, [lifecycle?.state, managedBaseUrl])
+
+  const upscaleActiveVersion = async () => {
+    if (!project || !scene || !activeVersion || !runtimeConfig || !upscaleAvailability.available) return
+    const existing = activeVersion.upscale_variants.find(item => item.backend === 'nvidia_rtx_vsr' && item.scale === 2)
+    if (existing) {
+      setSelectedUpscaleVariantId(existing.id)
+      setFileActionMessage('Showing the existing immutable RTX VSR 2× version. Create a new source render before making another upscale version.')
+      return
+    }
+    setUpscaling(true); setFileActionMessage(null); setWorkspaceError(null)
+    try {
+      replaceProject(await upscaleH3Render(project.id, scene.id, activeVersion.id, {
+        baseUrl: managedBaseUrl, inputDirectory: runtimeConfig.inputDirectory ?? '', outputDirectory: runtimeConfig.outputDirectory ?? '',
+      }))
+      setSelectedUpscaleVariantId(null)
+      setFileActionMessage(`Created immutable 2× RTX VSR version from ${createUpscaleVariantPlan(activeVersion).sourceResolution}.`)
+    } catch (error) { setWorkspaceError(error instanceof Error ? error.message : 'Local RTX VSR upscaling failed.') } finally { setUpscaling(false) }
+  }
+
   const openInEditor = (replaceVersions = false) => {
     if (!project) return
     previewVideoRef.current?.pause()
@@ -136,6 +165,31 @@ export function Home() {
       ? replaceVersions ? replaceH3EditorVersions(project, existing) : refreshH3EditorProvenance(project, existing)
       : buildH3EditorProject(project)
     writeProject(editorProjectId, editorProject)
+    writeProjectIds([editorProjectId, ...readProjectIds().filter(id => id !== editorProjectId)])
+    editorProjects.reloadProjectIds()
+    openProject(editorProjectId, 'video-editor')
+  }
+
+  const openActiveMediaInEditor = () => {
+    if (!project || !scene || !activeVersion || !activeUpscaleVariant) { openInEditor(false); return }
+    previewVideoRef.current?.pause()
+    const derivedProject: H3Project = {
+      ...project,
+      scenes: project.scenes.map(candidate => candidate.id !== scene.id ? candidate : {
+        ...candidate,
+        render_versions: candidate.render_versions.map(version => version.id !== activeVersion.id ? version : {
+          ...version,
+          video_file: activeUpscaleVariant.video_file,
+          metadata_file: activeUpscaleVariant.metadata_file,
+          output_sha256: activeUpscaleVariant.output_sha256,
+          width: activeUpscaleVariant.width, height: activeUpscaleVariant.height,
+          duration_seconds: activeUpscaleVariant.duration_seconds, frame_count: activeUpscaleVariant.ffprobe.frame_count,
+          ffprobe: activeUpscaleVariant.ffprobe,
+        }),
+      }),
+    }
+    const editorProjectId = h3EditorProjectId(project.id)
+    writeProject(editorProjectId, buildH3EditorProject(derivedProject))
     writeProjectIds([editorProjectId, ...readProjectIds().filter(id => id !== editorProjectId)])
     editorProjects.reloadProjectIds()
     openProject(editorProjectId, 'video-editor')
@@ -398,12 +452,14 @@ export function Home() {
   const activeVersion = useMemo(() => scene?.render_versions.find(
     version => version.id === scene.selected_render_version_id,
   ) ?? null, [scene])
-  const previewUrl = activeVersion
-    ? pathToFileUrl(activeVersion.video_file)
+  const activeUpscaleVariant = activeVersion?.upscale_variants.find(item => item.id === selectedUpscaleVariantId) ?? null
+  const activeMedia = activeUpscaleVariant ?? activeVersion
+  const previewUrl = activeMedia
+    ? pathToFileUrl(activeMedia.video_file)
     : scene?.reference_image ? pathToFileUrl(scene.reference_image) : null
   useEffect(() => {
     previewVideoRef.current?.pause()
-  }, [project?.id, scene?.id, activeVersion?.id])
+  }, [project?.id, scene?.id, activeVersion?.id, activeUpscaleVariant?.id])
   useEffect(() => () => previewVideoRef.current?.pause(), [])
   const sourceScene = scene && project ? [...project.scenes].sort((a, b) => a.order - b.order)[scene.order - 2] ?? null : null
   const sourceVersion = sourceScene?.render_versions.find(item => item.id === sourceScene.selected_render_version_id) ?? null
@@ -420,16 +476,17 @@ export function Home() {
   const activeVersionIndex = scene?.render_versions.findIndex(version => version.id === scene.selected_render_version_id) ?? -1
   const finalPrompt = scene ? composeH3AudioPrompt(scene) : ''
   const saveRenderCopy = async () => {
-    if (!project || !scene || !activeVersion) return
+    if (!project || !scene || !activeMedia || !activeVersion) return
     setFileActionMessage(null)
     const date = new Date().toISOString().slice(0, 10)
-    const defaultName = `${project.name.replace(/[<>:"/\\|?*]/g, '-').trim() || 'H3-Project'}_Scene${String(scene.order).padStart(2, '0')}_v${String(activeVersion.number).padStart(3, '0')}_${date}.mp4`
-    const result = await window.electronAPI.saveH3RenderCopy({ projectRoot: project.project_root, videoFile: activeVersion.video_file, defaultName })
+    const suffix = activeUpscaleVariant ? '_RTX-VSR-2x' : ''
+    const defaultName = `${project.name.replace(/[<>:"/\\|?*]/g, '-').trim() || 'H3-Project'}_Scene${String(scene.order).padStart(2, '0')}_v${String(activeVersion.number).padStart(3, '0')}${suffix}_${date}.mp4`
+    const result = await window.electronAPI.saveH3RenderCopy({ projectRoot: project.project_root, videoFile: activeMedia.video_file, defaultName })
     setFileActionMessage(result.success ? `Saved copy: ${result.path}` : result.error || 'Save copy failed.')
   }
   const revealRender = async () => {
-    if (!project || !activeVersion) return
-    const result = await window.electronAPI.revealH3Render({ projectRoot: project.project_root, videoFile: activeVersion.video_file })
+    if (!project || !activeMedia) return
+    const result = await window.electronAPI.revealH3Render({ projectRoot: project.project_root, videoFile: activeMedia.video_file })
     setFileActionMessage(result.success ? 'Opened render in Explorer.' : result.error || 'Could not show the render.')
   }
   const openProjectFolder = async () => {
@@ -439,6 +496,7 @@ export function Home() {
   }
   const selectVersionAt = (index: number) => {
     if (!project || !scene || index < 0 || index >= scene.render_versions.length) return
+    setSelectedUpscaleVariantId(null)
     void updateH3Scene(project.id, scene.id, { selected_render_version_id: scene.render_versions[index].id }).then(replaceProject)
   }
   const updateDuration = (value: string) => {
@@ -522,7 +580,7 @@ export function Home() {
         <div className="mt-6 grid grid-cols-2 gap-3">{scene && <><label className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Format</div><H3ThemedSelect value={scene.aspect_ratio} ariaLabel="Format" onChange={updateAspectRatio} options={[{ value: '1:1 (Square)', label: '1:1' }, { value: '16:9 (Widescreen)', label: '16:9' }, { value: '9:16 (Portrait Widescreen)', label: '9:16' }]} /></label><label className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Resolution</div><H3ThemedSelect value={scene.resolution_megapixels} ariaLabel="Resolution" onChange={updateResolution} options={([0.4, 0.6, 0.8, 1] as H3ResolutionMegapixels[]).map(megapixels => { const [width, height] = H3_RESOLUTION_PRESETS[scene.aspect_ratio][megapixels]; return { value: megapixels, label: `${width}×${height}` } })} /><div className="mt-1 text-[9px] text-zinc-600">{scene.resolution_megapixels.toFixed(1)} MP · derived from format</div></label><div className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">FPS</div><div className="mt-1 font-mono text-sm text-zinc-300">{scene.fps}</div><div className="mt-1 text-[9px] text-zinc-600">Fixed workflow value</div></div></>}
           <label className="rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Seed</div><input type="number" disabled={!scene} value={scene?.seed ?? 0} onChange={event => updateSceneLocally({ seed: Number(event.target.value) })} className="mt-1 w-full bg-transparent font-mono text-sm text-zinc-300 outline-none" /></label>
         </div>
-        {!!scene?.render_versions.length && <div className="mt-5"><div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Render version</div><div className="mt-2 flex gap-2"><button aria-label="Previous version" disabled={activeVersionIndex <= 0} onClick={() => selectVersionAt(activeVersionIndex - 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronLeft className="h-4 w-4" /></button><select value={scene.selected_render_version_id ?? ''} onChange={event => void updateH3Scene(project!.id, scene.id, { selected_render_version_id: event.target.value }).then(replaceProject)} className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#11151c] px-3 py-3 text-sm text-zinc-300">{scene.render_versions.map(version => <option key={version.id} value={version.id}>v{String(version.number).padStart(3, '0')} · {new Date(version.created_at).toLocaleString()}</option>)}</select><button aria-label="Next version" disabled={activeVersionIndex < 0 || activeVersionIndex >= scene.render_versions.length - 1} onClick={() => selectVersionAt(activeVersionIndex + 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronRight className="h-4 w-4" /></button></div>{activeVersion && <div className="mt-2 rounded-lg bg-white/[0.025] p-2 text-[10px] leading-5 text-zinc-500"><div>{new Date(activeVersion.created_at).toLocaleString()} · {activeVersion.width}×{activeVersion.height} · {activeVersion.duration_seconds}s</div><div>Seed {activeVersion.seed} · Prompt ID {activeVersion.prompt_id}</div><div className="mt-2 flex gap-2"><button onClick={() => void saveRenderCopy()} className="rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-200">Save Copy…</button><button onClick={() => void revealRender()} className="rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-200">Show in Folder</button><button onClick={() => setFileActionMessage(`${RTX_VSR_SETUP_REQUIRED.reason} Source ${createUpscaleVariantPlan(activeVersion).sourceResolution} remains unchanged.`)} className="rounded border border-amber-300/25 px-2 py-1 text-[10px] text-amber-200">Upscale Video…</button></div><p className="mt-2 text-[9px] text-amber-200/80">RTX VSR: Setup required. The original render will never be replaced.</p></div>}</div>}
+        {!!scene?.render_versions.length && <div className="mt-5"><div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Render version</div><div className="mt-2 flex gap-2"><button aria-label="Previous version" disabled={activeVersionIndex <= 0} onClick={() => selectVersionAt(activeVersionIndex - 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronLeft className="h-4 w-4" /></button><select value={scene.selected_render_version_id ?? ''} onChange={event => { setSelectedUpscaleVariantId(null); void updateH3Scene(project!.id, scene.id, { selected_render_version_id: event.target.value }).then(replaceProject) }} className="min-w-0 flex-1 rounded-xl border border-white/10 bg-[#11151c] px-3 py-3 text-sm text-zinc-300">{scene.render_versions.map(version => <option key={version.id} value={version.id}>v{String(version.number).padStart(3, '0')} · {new Date(version.created_at).toLocaleString()}</option>)}</select><button aria-label="Next version" disabled={activeVersionIndex < 0 || activeVersionIndex >= scene.render_versions.length - 1} onClick={() => selectVersionAt(activeVersionIndex + 1)} className="rounded-lg border border-white/10 px-2 disabled:opacity-25"><ChevronRight className="h-4 w-4" /></button></div>{activeVersion && <div className="mt-2 rounded-lg bg-white/[0.025] p-2 text-[10px] leading-5 text-zinc-500"><div className="font-medium text-zinc-200">{activeUpscaleVariant ? 'RTX VSR 2× derived version' : 'Original render'}</div><div>{activeMedia?.width}×{activeMedia?.height} · {activeMedia?.duration_seconds}s · {activeMedia?.fps} FPS</div>{!activeUpscaleVariant && <div>Seed {activeVersion.seed} · Prompt ID {activeVersion.prompt_id}</div>}{activeVersion.upscale_variants.length > 0 && <div className="mt-2 rounded border border-emerald-400/15 bg-emerald-400/[0.04] p-2"><div className="text-emerald-200">RTX VSR 2× derived versions</div><div className="mt-1 flex flex-wrap gap-1"><button onClick={() => setSelectedUpscaleVariantId(null)} className={`rounded border px-2 py-1 ${!activeUpscaleVariant ? 'border-zinc-300/40 text-zinc-100' : 'border-white/10 text-zinc-400'}`}>Original</button>{activeVersion.upscale_variants.map(variant => <button key={variant.id} onClick={() => setSelectedUpscaleVariantId(variant.id)} className={`rounded border px-2 py-1 ${activeUpscaleVariant?.id === variant.id ? 'border-emerald-300/50 text-emerald-100' : 'border-white/10 text-zinc-400'}`}>RTX VSR 2× · v{String(variant.number).padStart(3, '0')}</button>)}</div></div>}<div className="mt-2 flex flex-wrap gap-2"><button onClick={() => setSelectedUpscaleVariantId(activeUpscaleVariant?.id ?? null)} className="rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-200">Preview</button><button onClick={() => void saveRenderCopy()} className="rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-200">Save Copy…</button><button onClick={() => void revealRender()} className="rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-200">Show in Folder</button><button onClick={() => openActiveMediaInEditor()} className="rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-200">Open in Editor</button>{!activeUpscaleVariant && <button disabled={!upscaleAvailability.available || upscaling} onClick={() => void upscaleActiveVersion()} className="rounded border border-amber-300/25 px-2 py-1 text-[10px] text-amber-200 disabled:opacity-40">{upscaling ? 'Upscaling…' : activeVersion.upscale_variants.some(variant => variant.backend === 'nvidia_rtx_vsr' && variant.scale === 2) ? 'Show RTX VSR 2×' : 'Upscale Video 2×'}</button>}</div><p className={`mt-2 text-[9px] ${upscaleAvailability.available ? 'text-emerald-200/80' : 'text-amber-200/80'}`}>RTX VSR: {activeUpscaleVariant ? 'Viewing immutable derived output. Original remains available.' : upscaleAvailability.available ? `${createUpscaleVariantPlan(activeVersion).sourceResolution} → ${createUpscaleVariantPlan(activeVersion).outputResolution}. Original preserved.` : upscaleAvailability.reason}</p></div>}</div>}
         <details className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs"><summary className="cursor-pointer font-semibold text-zinc-300">Models</summary>{H3_WORKFLOW_PROFILES.map(profile => <div key={profile.id} className="mt-3"><div className="flex justify-between"><span>{profile.label}</span><span className={profile.status === 'verified' ? 'text-emerald-300' : 'text-amber-200'}>{profile.status === 'verified' ? 'Verified at runtime' : 'Setup required'}</span></div>{profile.reason && <p className="mt-1 text-[10px] text-zinc-500">{profile.reason}</p>}<div className="mt-1 text-[10px] text-zinc-500">{profile.requiredModels.length ? `${profile.requiredModels.length} declared local model files; no download source is configured.` : 'No manifest is declared until evidence is verified.'}</div></div>)}</details>
         {fileActionMessage && <p className="mt-3 text-[10px] text-zinc-400">{fileActionMessage}</p>}
         <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.025] p-3 text-xs"><div className="flex items-center justify-between"><div><div className="font-semibold text-zinc-300">Backend</div><div className="mt-1 text-[10px] text-zinc-500">{lifecycle?.state === 'ready' ? `Ready / ${lifecycle.owned ? 'H3 managed' : 'External'}` : lifecycle?.state.replace('_', ' ') ?? 'Checking'}{runtimeConfig ? ` / Sage: ${runtimeConfig.sageAttention ? 'On' : 'Off'}` : ''}</div></div><span className={`rounded-full px-2 py-1 text-[9px] uppercase ${lifecycle?.state === 'ready' ? 'bg-emerald-400/10 text-emerald-300' : lifecycle?.state === 'failed' || lifecycle?.state === 'incompatible' ? 'bg-red-400/10 text-red-300' : 'bg-amber-300/10 text-amber-200'}`}>{lifecycle?.state ?? 'checking'}</span></div>{(lifecycle?.error || (runtimeError && lifecycle?.state !== 'ready')) && <p className="mt-2 text-[10px] text-red-300">{lifecycle?.error ?? runtimeError}</p>}<details className="mt-3 border-t border-white/10 pt-3"><summary className="cursor-pointer text-[10px] font-semibold text-zinc-400">Advanced backend settings</summary>{runtimeConfig && <div className="mt-3 grid gap-2"><input value={runtimeConfig.rootPath} onChange={e => setRuntimeConfig({ ...runtimeConfig, rootPath: e.target.value })} placeholder="ComfyUI root" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><input value={runtimeConfig.pythonPath} onChange={e => setRuntimeConfig({ ...runtimeConfig, pythonPath: e.target.value })} placeholder="ComfyUI Python" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><label className="text-[10px] text-zinc-500">Port <input type="number" value={runtimeConfig.port} onChange={e => setRuntimeConfig({ ...runtimeConfig, port: Number(e.target.value) })} className="ml-2 w-16 rounded border border-white/10 bg-black/30 px-1 py-1 text-zinc-300" /></label><label className="flex items-center gap-2 text-[10px] text-zinc-500"><input type="checkbox" checked={runtimeConfig.autoLaunch} onChange={e => setRuntimeConfig({ ...runtimeConfig, autoLaunch: e.target.checked })} /> Auto-launch</label><input value={runtimeConfig.extraModelPathsConfig ?? ''} onChange={e => setRuntimeConfig({ ...runtimeConfig, extraModelPathsConfig: e.target.value })} placeholder="Extra model paths config" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><input value={runtimeConfig.inputDirectory ?? ''} onChange={e => setRuntimeConfig({ ...runtimeConfig, inputDirectory: e.target.value })} placeholder="ComfyUI input directory" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><input value={runtimeConfig.outputDirectory ?? ''} onChange={e => setRuntimeConfig({ ...runtimeConfig, outputDirectory: e.target.value })} placeholder="ComfyUI output directory" className="rounded border border-white/10 bg-black/30 px-2 py-1.5 text-[10px]" /><label className="flex items-center gap-2 text-[10px] text-zinc-500"><input type="checkbox" checked={Boolean(runtimeConfig.sageAttention)} onChange={e => setRuntimeConfig({ ...runtimeConfig, sageAttention: e.target.checked })} /> Sage Attention {lifecycle?.state === 'ready' ? '(Restart required)' : ''}</label><div className="grid grid-cols-2 gap-2"><button disabled={saveState === 'saving'} onClick={() => void saveRuntimeSettings()} className="rounded border border-white/10 px-2 py-1.5 text-[10px] disabled:opacity-40">{saveState === 'saving' ? 'Saving...' : 'Save runtime settings'}</button><button disabled={lifecycle?.state === 'starting' || lifecycle?.state === 'checking'} onClick={() => void startManagedRuntime()} className="rounded border border-emerald-400/20 px-2 py-1.5 text-[10px] text-emerald-200 disabled:opacity-40">{lifecycle?.state === 'starting' ? 'Starting...' : lifecycle?.state === 'checking' ? 'Checking...' : 'Start'}</button><button disabled={!lifecycle?.owned} onClick={() => void window.electronAPI.stopComfyRuntime().then(setLifecycle)} className="rounded border border-red-400/20 px-2 py-1.5 text-[10px] text-red-200 disabled:opacity-30">Stop</button><button disabled={!lifecycle?.owned} onClick={() => void window.electronAPI.restartComfyRuntime().then(setLifecycle)} className="rounded border border-amber-400/20 px-2 py-1.5 text-[10px] text-amber-200 disabled:opacity-30">Restart</button></div>{lifecycle?.diagnostics.length ? <details className="text-[10px] text-zinc-500"><summary className="cursor-pointer">Diagnostics</summary><div className="mt-1 font-mono">{lifecycle.diagnostics.join('\n')}</div></details> : null}</div>}</details></div>

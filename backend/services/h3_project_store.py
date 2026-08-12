@@ -17,6 +17,7 @@ from api_types import (
     H3ContinuityArtifact,
     H3RenderRun,
     H3RenderVersion,
+    H3UpscaleVariant,
     H3Scene,
     H3SceneUpdateRequest,
 )
@@ -118,7 +119,7 @@ class H3ProjectStore:
         if sequence_mode == "continuous_sequence":
             scenes = [scene.model_copy(update={"mode": "new_shot" if scene.order == 1 else "continue_previous"}) for scene in scenes]
         project = H3Project(
-            schema_version=9,
+            schema_version=10,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
@@ -329,6 +330,29 @@ class H3ProjectStore:
             raise ProjectStoreError("The selected scene could not be found.")
         return self.save_project(project.model_copy(update={"scenes": scenes, "selected_scene_id": scene_id}))
 
+    def add_upscale_variant(self, project_id: str, scene_id: str, source_version_id: str, variant: H3UpscaleVariant) -> H3Project:
+        """Persist a derived render beside its immutable source version atomically."""
+        project = self.get_project(project_id)
+        scenes: list[H3Scene] = []
+        found = False
+        for scene in project.scenes:
+            if scene.id != scene_id:
+                scenes.append(scene)
+                continue
+            versions = []
+            for version in scene.render_versions:
+                if version.id != source_version_id:
+                    versions.append(version)
+                    continue
+                found = True
+                if any(item.id == variant.id for item in version.upscale_variants):
+                    raise ProjectStoreError("The immutable RTX VSR version already exists.")
+                versions.append(version.model_copy(update={"upscale_variants": [*version.upscale_variants, variant]}))
+            scenes.append(scene.model_copy(update={"render_versions": versions}))
+        if not found:
+            raise ProjectStoreError("The source render version could not be found.")
+        return self.save_project(project.model_copy(update={"scenes": scenes, "selected_scene_id": scene_id}))
+
     def add_continuity_artifact(
         self,
         project_id: str,
@@ -454,12 +478,12 @@ class H3ProjectStore:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             original_schema = payload.get("schema_version")
-            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8}
+            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9}
             if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
             if migrated:
-                payload["schema_version"] = 9
+                payload["schema_version"] = 10
                 payload.setdefault("sequence_mode", "independent_shots")
                 for scene in payload.get("scenes", []):
                     scene.setdefault("mode", "new_shot")
@@ -486,6 +510,7 @@ class H3ProjectStore:
                         version.setdefault("no_speech", scene.get("no_speech", False))
                         version.setdefault("no_music", scene.get("no_music", False))
                         version.setdefault("custom_audio_instruction", scene.get("custom_audio_instruction", ""))
+                        version.setdefault("upscale_variants", [])
                 for run in payload.get("render_runs", []):
                     for item in run.get("items", []):
                         item.setdefault("current_phase", None)

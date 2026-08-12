@@ -74,7 +74,17 @@ export interface H3RenderVersion {
   workflow_sha256: string
   output_sha256: string
   ffprobe: H3VideoProbe
+  upscale_variants: H3UpscaleVariant[]
 }
+
+export interface H3UpscaleVariant {
+  id: string; number: number; created_at: string; root: string; video_file: string; metadata_file: string
+  backend: 'nvidia_rtx_vsr'; source_render_version_id: string; source_width: number; source_height: number
+  width: number; height: number; scale: 2; fps: number; duration_seconds: number; audio_preserved: boolean
+  prompt_id: string; source_video_sha256: string; output_sha256: string; ffprobe: H3VideoProbe
+}
+
+export interface H3UpscaleAvailability { available: boolean; backend: 'nvidia_rtx_vsr'; reason: string }
 
 export interface H3ContinuityArtifact {
   id: string
@@ -133,7 +143,7 @@ export interface H3Scene {
 }
 
 export interface H3Project {
-  schema_version: 9
+  schema_version: 10
   id: string
   name: string
   created_at: string
@@ -230,4 +240,15 @@ export async function startH3Sequence(projectId: string, kind: 'scene' | 'from_h
 
 export async function stopH3Sequence(projectId: string, runId: string): Promise<H3RenderRun> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/sequences/${encodeURIComponent(runId)}/stop`, { method: 'POST' }))
+}
+
+export async function getH3UpscaleAvailability(baseUrl: string): Promise<H3UpscaleAvailability> {
+  return readJson(await backendFetch(`/api/comfyui/minimax-h3/upscale/availability?base_url=${encodeURIComponent(baseUrl)}`))
+}
+
+export async function upscaleH3Render(projectId: string, sceneId: string, versionId: string, config: { baseUrl: string; inputDirectory: string; outputDirectory: string }): Promise<H3Project> {
+  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/renders/${encodeURIComponent(versionId)}/upscale`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ base_url: config.baseUrl, input_directory: config.inputDirectory, output_directory: config.outputDirectory, scale: 2 }),
+  }))
 }

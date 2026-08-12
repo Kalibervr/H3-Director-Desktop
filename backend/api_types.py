@@ -209,6 +209,32 @@ class H3RenderVersion(BaseModel):
     workflow_sha256: str
     output_sha256: str
     ffprobe: MiniMaxH3VideoProbeResponse
+    upscale_variants: list["H3UpscaleVariant"] = Field(default_factory=list)
+
+
+class H3UpscaleVariant(BaseModel):
+    """Immutable locally-derived post-process asset; never replaces its source render."""
+    model_config = ConfigDict(strict=True)
+    id: str
+    number: int = Field(ge=1)
+    created_at: str
+    root: str
+    video_file: str
+    metadata_file: str
+    backend: Literal["nvidia_rtx_vsr"]
+    source_render_version_id: str
+    source_width: int = Field(ge=1)
+    source_height: int = Field(ge=1)
+    width: int = Field(ge=1)
+    height: int = Field(ge=1)
+    scale: Literal[2]
+    fps: int = Field(ge=1)
+    duration_seconds: float = Field(gt=0)
+    audio_preserved: bool
+    prompt_id: str
+    source_video_sha256: str
+    output_sha256: str
+    ffprobe: MiniMaxH3VideoProbeResponse
 
 
 class H3ContinuityArtifact(BaseModel):
@@ -302,7 +328,7 @@ class H3RenderRun(BaseModel):
 
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[9]
+    schema_version: Literal[10]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str
@@ -360,6 +386,21 @@ class H3SceneUpdateRequest(BaseModel):
 class H3ProjectRenderRequest(BaseModel):
     model_config = ConfigDict(strict=True)
     base_url: str = "http://127.0.0.1:8188"
+
+
+class H3UpscaleRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+    base_url: str
+    input_directory: str
+    output_directory: str
+    scale: Literal[2] = 2
+
+
+class H3UpscaleAvailabilityResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+    available: bool
+    backend: Literal["nvidia_rtx_vsr"] = "nvidia_rtx_vsr"
+    reason: str
 
 
 class H3SequenceStartRequest(BaseModel):
