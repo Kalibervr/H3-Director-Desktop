@@ -135,6 +135,15 @@ test('LTX T2V is routed as an image-free runtime-verified mode with its exact lo
   assert.match(home, /profile\.status === 'verified'/)
 })
 
+test('selected render versions expose reproducible prompt and timing details', () => {
+  const sidebar = read('frontend/components/DirectorControlsSidebar.tsx')
+  const projectTypes = read('frontend/lib/h3-projects.ts')
+  for (const label of ['Prompt Used', 'Raw:', 'Submitted:', 'Native Prompt Enhance:', 'Copy']) assert.match(sidebar, new RegExp(label))
+  assert.match(sidebar, /navigator\.clipboard\?\.writeText\(activeVersion\.prompt_id\)/)
+  assert.match(sidebar, /ComfyUI internal text not recorded by this workflow/)
+  for (const field of ['raw_user_prompt', 'improved_prompt', 'native_enhanced_prompt', 'final_submitted_prompt', 'native_prompt_enhance', 'render_elapsed_seconds']) assert.match(projectTypes, new RegExp(field))
+})
+
 test('workspace exposes Stop Render and H3 Director product branding', () => {
   const home = read('frontend/views/Home.tsx')
   const window = read('electron/window.ts')

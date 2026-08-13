@@ -176,6 +176,7 @@ class ComfyUILtx25T2VProvider:
         client_id = uuid.uuid4().hex
         payload = build_ltx_t2v_prompt_payload(workflow, request, client_id)
         started = time.monotonic()
+        started_at = datetime.now(UTC)
         try:
             response = self._session.post(f"{normalized}/prompt", json=payload, timeout=30.0, allow_redirects=False)
             response.raise_for_status(); prompt_id = _object(response.json()).get("prompt_id")
@@ -196,7 +197,7 @@ class ComfyUILtx25T2VProvider:
         video = probe_video(self._ffprobe_path, source)
         if (video.width, video.height, video.frame_count, video.audio_present) != (request.width, request.height, request.frame_count, True) or video.fps not in {"24", "24/1"} or abs(video.duration_seconds - request.duration_seconds) > .25:
             raise ProviderError("The LTX T2V output does not match the verified video and audio contract.")
-        directory, output, metadata = self._adopt(source, prompt_id, request, video, time.monotonic() - started)
+        directory, output, metadata = self._adopt(source, prompt_id, request, video, time.monotonic() - started, started_at, datetime.now(UTC))
         return RenderResult(prompt_id, source, directory, output, metadata, video)
 
     def _validate_runtime(self, base_url: str, workflow: JsonObject) -> None:
@@ -212,7 +213,7 @@ class ComfyUILtx25T2VProvider:
             elif class_type == "LatentUpscaleModelLoader": available.update(_object(info[class_type])["input"]["required"][field][1]["options"])
         if not LTX_T2V_MODELS.issubset(available): raise ProviderError("Local ComfyUI is missing a required LTX T2V model.")
 
-    def _adopt(self, source: Path, prompt_id: str, request: LtxT2VRequest, video: VideoProbe, elapsed_seconds: float) -> tuple[Path, Path, Path]:
+    def _adopt(self, source: Path, prompt_id: str, request: LtxT2VRequest, video: VideoProbe, elapsed_seconds: float, started_at: datetime, completed_at: datetime) -> tuple[Path, Path, Path]:
         self._render_root.mkdir(parents=True, exist_ok=True)
         for number in range(1, 10000):
             directory = self._render_root / f"v{number:03d}"
@@ -222,7 +223,7 @@ class ComfyUILtx25T2VProvider:
         output, metadata = directory / f"SceneLTXT2V_v{number:03d}.mp4", directory / "render-metadata.json"
         try:
             shutil.copy2(source, output)
-            payload = {"schema_version": 1, "provider": "ComfyUILtx25T2VProvider", "created_at": datetime.now(UTC).isoformat(), "workflow_profile_id": "ltx_2_5_text_to_video", "mode": "text_to_video", "workflow_sha256": LTX_T2V_WORKFLOW_SHA256, "reference_image_used": False, "prompt_id": prompt_id, "prompt": request.prompt, "audio_guidance": request.audio_guidance, "prompt_enhance": request.prompt_enhance, "models": sorted(LTX_T2V_MODELS), "aspect_ratio": request.aspect_ratio, "resolution_megapixels": request.resolution_megapixels, "width": request.width, "height": request.height, "fps": request.fps, "duration_seconds": request.duration_seconds, "frame_count": request.frame_count, "seed": request.seed, "latent_upscale": {"enabled": True, "model": "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"}, "audio_capability": "synchronized_audio_decode", "elapsed_seconds": elapsed_seconds, "output_sha256": hashlib.sha256(output.read_bytes()).hexdigest(), "ffprobe": asdict(video)}
+            payload = {"schema_version": 1, "provider": "ComfyUILtx25T2VProvider", "created_at": completed_at.isoformat(), "workflow_profile_id": "ltx_2_5_text_to_video", "mode": "text_to_video", "workflow_sha256": LTX_T2V_WORKFLOW_SHA256, "reference_image_used": False, "prompt_id": prompt_id, "prompt": request.prompt, "raw_user_prompt": request.prompt, "improved_prompt": None, "native_enhanced_prompt": None, "final_submitted_prompt": request.prompt, "native_prompt_enhance": request.prompt_enhance, "native_enhanced_prompt_capture": "not_available_from_verified_comfyui_history", "audio_guidance": request.audio_guidance, "prompt_enhance": request.prompt_enhance, "models": sorted(LTX_T2V_MODELS), "aspect_ratio": request.aspect_ratio, "resolution_megapixels": request.resolution_megapixels, "width": request.width, "height": request.height, "fps": request.fps, "duration_seconds": request.duration_seconds, "frame_count": request.frame_count, "seed": request.seed, "latent_upscale": {"enabled": True, "model": "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"}, "audio_capability": "synchronized_audio_decode", "render_started_at": started_at.isoformat(), "render_completed_at": completed_at.isoformat(), "render_elapsed_seconds": elapsed_seconds, "output_sha256": hashlib.sha256(output.read_bytes()).hexdigest(), "ffprobe": asdict(video)}
             temporary = directory / f".metadata.{uuid.uuid4().hex}.tmp"; temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8"); os.replace(temporary, metadata)
         except OSError as exc:
             shutil.rmtree(directory, ignore_errors=True); raise ProviderError("The immutable LTX T2V render version could not be created.") from exc

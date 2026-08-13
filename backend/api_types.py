@@ -205,6 +205,11 @@ class H3RenderVersion(BaseModel):
     metadata_file: str
     prompt: str
     final_prompt: str | None = None
+    raw_user_prompt: str | None = None
+    improved_prompt: str | None = None
+    native_enhanced_prompt: str | None = None
+    final_submitted_prompt: str | None = None
+    native_prompt_enhance: bool | None = None
     audio_mode: Literal["natural_ambience", "dialogue", "silent"] = "natural_ambience"
     no_speech: bool = False
     no_music: bool = False
@@ -347,7 +352,7 @@ class H3RenderRun(BaseModel):
 
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[14]
+    schema_version: Literal[15]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str

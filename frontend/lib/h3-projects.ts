@@ -63,6 +63,11 @@ export interface H3RenderVersion {
   metadata_file: string
   prompt: string
   final_prompt: string | null
+  raw_user_prompt: string | null
+  improved_prompt: string | null
+  native_enhanced_prompt: string | null
+  final_submitted_prompt: string | null
+  native_prompt_enhance: boolean | null
   audio_mode: H3AudioMode
   no_speech: boolean
   no_music: boolean
@@ -151,7 +156,7 @@ export interface H3Scene {
 }
 
 export interface H3Project {
-  schema_version: 14
+  schema_version: 15
   id: string
   name: string
   created_at: string

@@ -144,7 +144,7 @@ class H3ProjectStore:
         if sequence_mode == "continuous_sequence":
             scenes = [scene.model_copy(update={"mode": "new_shot" if scene.order == 1 else "continue_previous"}) for scene in scenes]
         project = H3Project(
-            schema_version=14,
+            schema_version=15,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
@@ -464,25 +464,38 @@ class H3ProjectStore:
         Older immutable versions remain intentionally unset; their file times are
         not a substitute for a measured render interval.
         """
-        if version.render_elapsed_seconds is not None:
-            return version
         try:
             payload = json.loads(Path(version.metadata_file).read_text(encoding="utf-8"))
+            changes: dict[str, object] = {}
+            for field, metadata_key in (
+                ("raw_user_prompt", "raw_user_prompt"),
+                ("improved_prompt", "improved_prompt"),
+                ("native_enhanced_prompt", "native_enhanced_prompt"),
+                ("final_submitted_prompt", "final_submitted_prompt"),
+                ("native_prompt_enhance", "native_prompt_enhance"),
+            ):
+                value = payload.get(metadata_key)
+                if getattr(version, field) is None and (isinstance(value, str) or (field == "native_prompt_enhance" and isinstance(value, bool))):
+                    changes[field] = value
+            if version.render_elapsed_seconds is not None:
+                return version.model_copy(update=changes) if changes else version
             elapsed = payload.get("render_elapsed_seconds", payload.get("elapsed_seconds"))
             if isinstance(elapsed, (int, float)) and elapsed >= 0:
-                completed = version.render_completed_at or version.created_at
-                started = version.render_started_at
+                completed = version.render_completed_at or payload.get("render_completed_at") or version.created_at
+                started = version.render_started_at or payload.get("render_started_at")
                 if started is None:
                     try:
                         completed_at = datetime.fromisoformat(completed.replace("Z", "+00:00"))
                         started = (completed_at - timedelta(seconds=float(elapsed))).isoformat()
                     except (TypeError, ValueError):
                         started = None
-                return version.model_copy(update={
+                return version.model_copy(update={**changes,
                     "render_elapsed_seconds": float(elapsed),
                     "render_started_at": started,
                     "render_completed_at": completed,
                 })
+            if changes:
+                return version.model_copy(update=changes)
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
             pass
         return version
@@ -568,12 +581,12 @@ class H3ProjectStore:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             original_schema = payload.get("schema_version")
-            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
+            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
             if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
             if migrated:
-                payload["schema_version"] = 14
+                payload["schema_version"] = 15
                 payload.setdefault("sequence_mode", "independent_shots")
                 payload.setdefault("workflow_profile_id", "minimax_h3_image_to_video")
                 payload.setdefault("workflow_mode", "image_to_video")
@@ -609,6 +622,11 @@ class H3ProjectStore:
                         version.setdefault("render_started_at", None)
                         version.setdefault("render_completed_at", None)
                         version.setdefault("render_elapsed_seconds", None)
+                        version.setdefault("raw_user_prompt", None)
+                        version.setdefault("improved_prompt", None)
+                        version.setdefault("native_enhanced_prompt", None)
+                        version.setdefault("final_submitted_prompt", None)
+                        version.setdefault("native_prompt_enhance", None)
                         for variant in version["upscale_variants"]:
                             variant.setdefault("processing_elapsed_seconds", None)
                 for run in payload.get("render_runs", []):

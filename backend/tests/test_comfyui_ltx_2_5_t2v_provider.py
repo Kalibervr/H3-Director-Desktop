@@ -1,10 +1,12 @@
 import copy
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 
 import pytest
 
 from services.comfyui_ltx_2_5_t2v_provider import (
+    ComfyUILtx25T2VProvider,
     LTX_T2V_MAPPING,
     LtxT2VRequest,
     ProviderError,
@@ -12,6 +14,7 @@ from services.comfyui_ltx_2_5_t2v_provider import (
     build_ltx_t2v_prompt_payload,
     validate_ltx_t2v_workflow,
 )
+from services.comfyui_minimax_h3_provider import VideoProbe
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -52,6 +55,29 @@ def test_preflight_rejects_image_mutation():
 
 def test_output_polling_treats_absent_history_as_incomplete(tmp_path: Path):
     assert _discover_output({}, "pending-prompt", tmp_path) is None
+
+
+def test_output_polling_treats_queued_history_as_incomplete(tmp_path: Path):
+    history = {"queued-prompt": {"status": {"completed": False, "status_str": "queued"}, "outputs": {}}}
+    assert _discover_output(history, "queued-prompt", tmp_path) is None
+
+
+def test_output_polling_never_adopts_a_different_prompt_history(tmp_path: Path):
+    assert _discover_output({"older-prompt": {"status": {"completed": True}, "outputs": {}}}, "submitted-prompt", tmp_path) is None
+
+
+def test_adoption_persists_exact_submitted_prompt_and_authoritative_timing(tmp_path: Path):
+    source = tmp_path / "source.mp4"; source.write_bytes(b"video")
+    provider = ComfyUILtx25T2VProvider(workflow_path=ROOT / "workflows" / "ltx_2_5_text_to_video_api_official.json", output_root=tmp_path, render_root=tmp_path / "renders", ffprobe_path=tmp_path / "ffprobe")
+    started, completed = datetime(2026, 8, 13, tzinfo=UTC), datetime(2026, 8, 13, 0, 1, tzinfo=UTC)
+    _, _, metadata = provider._adopt(source, "submitted-prompt", request(), VideoProbe("h264", 1280, 704, "24/1", 5.0, 121, True), 60.0, started, completed)
+    payload = json.loads(metadata.read_text())
+    assert payload["raw_user_prompt"] == request().prompt
+    assert payload["final_submitted_prompt"] == request().prompt
+    assert payload["native_enhanced_prompt"] is None
+    assert payload["render_elapsed_seconds"] == 60.0
+    assert payload["render_started_at"] == started.isoformat()
+    assert payload["render_completed_at"] == completed.isoformat()
 
 
 @pytest.mark.parametrize("ratio,width,height", [("9:16 (Portrait Widescreen)", 704, 1280), ("1:1 (Square)", 960, 960)])
