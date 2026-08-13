@@ -117,9 +117,20 @@ class H3ProjectStore:
         timestamp = _now()
         scenes = [self._new_scene(number, _scene_storage_name(number)) for number in range(1, scene_count + 1)]
         if workflow_profile_id == "ltx_2_5_image_to_video":
-            # This is the sole locally executed LTX 2.5 configuration captured in
-            # the workflow contract.  It is persisted for profile-driven editing;
-            # rendering remains blocked until an H3 provider binding is verified.
+            # Preserve the independently verified I2V profile settings.
+            scenes = [scene.model_copy(update={
+                "aspect_ratio": "16:9 (Widescreen)",
+                "resolution_megapixels": 0.9,
+                "width": 1280,
+                "height": 704,
+                "fps": 24,
+                "frame_count": 121,
+                "ltx_prompt_enhance": True,
+            }) for scene in scenes]
+        if workflow_profile_id == "ltx_2_5_text_to_video":
+            # The official T2V export independently proves this locked initial
+            # configuration.  Keeping this block separate prevents T2V from
+            # inheriting I2V image assumptions as profiles evolve.
             scenes = [scene.model_copy(update={
                 "aspect_ratio": "16:9 (Widescreen)",
                 "resolution_megapixels": 0.9,

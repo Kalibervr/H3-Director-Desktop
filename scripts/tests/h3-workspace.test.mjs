@@ -122,6 +122,19 @@ test('H3 foundations keep audio suppression local and gate unverified post-proce
   assert.match(home, /Original remains available/)
 })
 
+test('LTX T2V is routed as an image-free runtime-verified mode with its exact locked scope', () => {
+  const home = read('frontend/views/Home.tsx')
+  const profiles = read('frontend/lib/h3-workflow-profiles.ts')
+  assert.match(profiles, /id: 'ltx_2_5_text_to_video'/)
+  assert.match(profiles, /status: 'runtime_verified'/)
+  assert.match(profiles, /ltx_2_5_text_to_video_api_official\.json/)
+  assert.match(home, /LTX 2\.5 mode/)
+  assert.match(home, /Text to Video is runtime-verified only/)
+  assert.match(home, /const ltxTextToVideo/)
+  assert.match(home, /!promptOnly && !ltxTextToVideo/)
+  assert.match(home, /profile\.status === 'verified'/)
+})
+
 test('workspace exposes Stop Render and H3 Director product branding', () => {
   const home = read('frontend/views/Home.tsx')
   const window = read('electron/window.ts')

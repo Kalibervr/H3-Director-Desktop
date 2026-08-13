@@ -49,6 +49,7 @@ from services.comfyui_minimax_h3_provider import (
     load_verified_workflow,
 )
 from services.comfyui_ltx_2_5_provider import ComfyUILtx25I2VProvider, LtxI2VRequest
+from services.comfyui_ltx_2_5_t2v_provider import ComfyUILtx25T2VProvider, LtxT2VRequest
 from services.comfyui_runtime_probe import ComfyUIRuntimeProbe
 from server_utils.loopback_url import require_loopback_http_url
 from services.h3_project_store import H3ProjectStore, ProjectStoreError
@@ -103,6 +104,15 @@ def resolve_ltx_i2v_runtime_paths(render_root_override: Path | None = None) -> H
     repository_or_resources_root = Path(__file__).resolve().parents[2]
     workflow = _environment_path("H3_LTX_2_5_I2V_WORKFLOW_PATH") or (
         repository_or_resources_root / "workflows" / "ltx_2_5_image_to_video_api.json"
+    )
+    return H3RuntimePaths(workflow, paths.comfyui_output, paths.render_root, paths.ffprobe, paths.ffmpeg)
+
+
+def resolve_ltx_t2v_runtime_paths(render_root_override: Path | None = None) -> H3RuntimePaths:
+    paths = resolve_h3_runtime_paths(render_root_override)
+    repository_or_resources_root = Path(__file__).resolve().parents[2]
+    workflow = _environment_path("H3_LTX_2_5_T2V_WORKFLOW_PATH") or (
+        repository_or_resources_root / "workflows" / "ltx_2_5_text_to_video_api_official.json"
     )
     return H3RuntimePaths(workflow, paths.comfyui_output, paths.render_root, paths.ffprobe, paths.ffmpeg)
 
@@ -397,6 +407,8 @@ class ComfyUIMiniMaxH3Handler:
             project = self._project_store.get_project(project_id)
             if project.workflow_profile_id == "ltx_2_5_image_to_video":
                 return self._render_ltx_i2v_project_scene(project, scene_id, request)
+            if project.workflow_profile_id == "ltx_2_5_text_to_video":
+                return self._render_ltx_t2v_project_scene(project, scene_id, request)
             if project.workflow_profile_id == "minimax_h3_no_reference":
                 return self._render_minimax_h3_no_reference_project_scene(project, scene_id, request)
             if project.workflow_profile_id != "minimax_h3_image_to_video":
@@ -621,6 +633,31 @@ class ComfyUIMiniMaxH3Handler:
             safe_error = str(exc) if isinstance(exc, (ProviderError, ProjectStoreError)) else "The local LTX render could not be adopted safely."
             self._project_store.set_scene_status(project.id, scene.id, "failed", error=safe_error, phase="Failed")
             raise HTTPError(422, safe_error, code="LTX_2_5_I2V_RENDER_FAILED") from exc
+
+    def _render_ltx_t2v_project_scene(self, project: H3Project, scene_id: str, request: H3ProjectRenderRequest) -> H3Project:
+        scene = next((item for item in project.scenes if item.id == scene_id), None)
+        if scene is None: raise ProjectStoreError("The selected scene could not be found.")
+        if not scene.prompt.strip(): raise ProjectStoreError("LTX 2.5 Text-to-Video requires a prompt.")
+        if (scene.aspect_ratio, scene.resolution_megapixels, scene.width, scene.height, scene.fps, scene.duration_seconds, scene.frame_count) != ("16:9 (Widescreen)", 0.9, 1280, 704, 24, 5.0, 121):
+            raise ProjectStoreError("Only the verified LTX 2.5 T2V 16:9 / 0.9 MP / 24 FPS / 5-second profile is enabled.")
+        scene_root = Path(project.project_root) / "scenes" / scene.storage_name
+        paths = resolve_ltx_t2v_runtime_paths(scene_root / "renders")
+        provider = ComfyUILtx25T2VProvider(workflow_path=paths.workflow, output_root=paths.comfyui_output, render_root=paths.render_root, ffprobe_path=paths.ffprobe)
+        self._project_store.set_scene_status(project.id, scene.id, "rendering", error=None, phase="Submitting LTX 2.5 T2V")
+        try:
+            audio_guidance = compose_h3_prompt(scene.prompt, H3AudioGuidance(
+                mode=scene.audio_mode, no_speech=scene.no_speech,
+                no_music=scene.no_music, custom_instruction=scene.custom_audio_instruction,
+            ))
+            result = provider.render(base_url=request.base_url, request=LtxT2VRequest(prompt=scene.prompt, prompt_enhance=scene.ltx_prompt_enhance, seed=scene.seed, aspect_ratio=scene.aspect_ratio, resolution_megapixels=scene.resolution_megapixels, width=scene.width, height=scene.height, duration_seconds=scene.duration_seconds, fps=scene.fps, frame_count=scene.frame_count, output_filename_prefix=f"ltx_t2v_scene_{scene.order:03d}", audio_guidance=audio_guidance))
+            payload = json.loads(result.metadata_file.read_text(encoding="utf-8")); number = int(result.render_directory.name.removeprefix("v"))
+            version = H3RenderVersion(id=result.render_directory.name, number=number, created_at=str(payload["created_at"]), root=str(result.render_directory), video_file=str(result.output_file), metadata_file=str(result.metadata_file), prompt=scene.prompt, final_prompt=scene.prompt, audio_mode=scene.audio_mode, no_speech=scene.no_speech, no_music=scene.no_music, custom_audio_instruction=scene.custom_audio_instruction, input_image_reference="No reference image used", seed=scene.seed, width=scene.width, height=scene.height, fps=scene.fps, duration_seconds=scene.duration_seconds, frame_count=result.video.frame_count, prompt_id=result.prompt_id, input_image_sha256="not-applicable", workflow_sha256=str(payload["workflow_sha256"]), output_sha256=str(payload["output_sha256"]), ffprobe=MiniMaxH3VideoProbeResponse(**result.video.__dict__))
+            updated = self._project_store.add_render_version(project.id, scene.id, version)
+            return self._project_store.set_scene_status(updated.id, scene.id, "complete", error=None, phase="Complete")
+        except (ProviderError, ProjectStoreError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            safe_error = str(exc) if isinstance(exc, (ProviderError, ProjectStoreError)) else "The local LTX T2V render could not be adopted safely."
+            self._project_store.set_scene_status(project.id, scene.id, "failed", error=safe_error, phase="Failed")
+            raise HTTPError(422, safe_error, code="LTX_2_5_T2V_RENDER_FAILED") from exc
 
     def _render_for_sequence(
         self,
