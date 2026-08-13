@@ -52,3 +52,9 @@ def test_preflight_rejects_image_mutation():
 
 def test_output_polling_treats_absent_history_as_incomplete(tmp_path: Path):
     assert _discover_output({}, "pending-prompt", tmp_path) is None
+
+
+@pytest.mark.parametrize("ratio,width,height", [("9:16 (Portrait Widescreen)", 704, 1280), ("1:1 (Square)", 960, 960)])
+def test_supervised_ltx_t2v_geometry_candidate_maps_to_selector(ratio: str, width: int, height: int):
+    payload = build_ltx_t2v_prompt_payload(workflow(), LtxT2VRequest("A quiet scene.", True, 42, ratio, 0.9, width, height, 5.0, 24, 121, "scene"), "clientabcd")
+    assert payload["prompt"]["409"]["inputs"]["aspect_ratio"] == ratio

@@ -2,7 +2,9 @@ import type { H3AspectRatio, H3ResolutionMegapixels, H3WorkflowMode, H3WorkflowP
 
 export interface H3ModelManifestEntry { id: string; displayName: string; role: 'diffusion_model' | 'text_encoder' | 'vae' | 'audio_encoder' | 'lora' | 'other'; expectedFilename: string | null; destinationCategory: string | null; required: boolean; source: null; downloadUrl: null; sha256: null }
 export interface H3WorkflowModeProfile { id: H3WorkflowMode; label: string; verified: boolean; capabilities: { imageToVideo: boolean; textToVideo: boolean; continuePrevious: boolean; multiShot: boolean; audio: boolean; referenceImage: boolean }; aspectRatios: readonly H3AspectRatio[]; resolutionMegapixels: readonly H3ResolutionMegapixels[]; fpsPresets: readonly number[]; seed: boolean; referenceFit: boolean; audioGuidance: boolean; nativePromptEnhance: boolean; postProcessing: readonly string[] }
-export interface H3WorkflowProfile { id: H3WorkflowProfileId; label: string; displayName: string; providerFamily: string; version: string; profileSchemaVersion: 1; status: 'verified' | 'runtime_verified' | 'contract_verified' | 'missing_models' | 'missing_nodes' | 'incompatible' | 'not_verified'; reason?: string; modes: readonly H3WorkflowModeProfile[]; requiredModels: readonly H3ModelManifestEntry[]; apiWorkflow: string; requiredNodes: readonly string[] }
+export type H3PresetStatus = 'runtime_verified' | 'contract_verified' | 'unavailable'
+export interface H3WorkflowPreset { aspectRatio: string; megapixels: number; selectorWidth: number; selectorHeight: number; finalWidth: number; finalHeight: number; status: H3PresetStatus }
+export interface H3WorkflowProfile { id: H3WorkflowProfileId; label: string; displayName: string; providerFamily: string; version: string; profileSchemaVersion: 1; status: 'verified' | 'runtime_verified' | 'contract_verified' | 'missing_models' | 'missing_nodes' | 'incompatible' | 'not_verified'; reason?: string; modes: readonly H3WorkflowModeProfile[]; requiredModels: readonly H3ModelManifestEntry[]; apiWorkflow: string; requiredNodes: readonly string[]; presets?: readonly H3WorkflowPreset[] }
 
 export const LTX_2_5_OFFICIAL_MODEL_PAGE = 'https://huggingface.co/Lightricks/LTX-2.5'
 export const LTX_2_5_MODEL_MANIFEST: readonly H3ModelManifestEntry[] = [
@@ -12,6 +14,19 @@ export const LTX_2_5_MODEL_MANIFEST: readonly H3ModelManifestEntry[] = [
   { id: 'ltx-2-5-video-vae', displayName: 'Video VAE', role: 'vae', expectedFilename: 'ltx-2.5-video-vae-bf16.safetensors', destinationCategory: 'vae', required: true, source: null, downloadUrl: null, sha256: null },
   { id: 'ltx-2-5-audio-vae', displayName: 'Audio VAE', role: 'vae', expectedFilename: 'ltx-2.5-audio-vae-bf16.safetensors', destinationCategory: 'vae', required: true, source: null, downloadUrl: null, sha256: null },
   { id: 'ltx-2-5-spatial-upscaler', displayName: 'Spatial upscaler ×2', role: 'other', expectedFilename: 'ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors', destinationCategory: 'latent_upscale_models', required: true, source: null, downloadUrl: null, sha256: null },
+]
+
+// Derived from the captured graphs and the installed ResolutionSelector. These
+// are not render enablement claims: only the marked row has product evidence.
+export const LTX_2_5_PRESETS: readonly H3WorkflowPreset[] = [
+  { aspectRatio: '16:9 (Widescreen)', megapixels: 0.9, selectorWidth: 1280, selectorHeight: 736, finalWidth: 1280, finalHeight: 704, status: 'runtime_verified' },
+  { aspectRatio: '9:16 (Portrait Widescreen)', megapixels: 0.4, selectorWidth: 480, selectorHeight: 864, finalWidth: 448, finalHeight: 832, status: 'contract_verified' },
+  { aspectRatio: '9:16 (Portrait Widescreen)', megapixels: 0.6, selectorWidth: 608, selectorHeight: 1056, finalWidth: 576, finalHeight: 1024, status: 'contract_verified' },
+  { aspectRatio: '9:16 (Portrait Widescreen)', megapixels: 0.9, selectorWidth: 736, selectorHeight: 1280, finalWidth: 704, finalHeight: 1280, status: 'runtime_verified' },
+  { aspectRatio: '1:1 (Square)', megapixels: 0.4, selectorWidth: 640, selectorHeight: 640, finalWidth: 640, finalHeight: 640, status: 'contract_verified' },
+  { aspectRatio: '1:1 (Square)', megapixels: 0.9, selectorWidth: 960, selectorHeight: 960, finalWidth: 960, finalHeight: 960, status: 'runtime_verified' },
+  { aspectRatio: '4:3 (Standard)', megapixels: 0.9, selectorWidth: 1120, selectorHeight: 832, finalWidth: 1088, finalHeight: 832, status: 'contract_verified' },
+  { aspectRatio: '3:4 (Portrait Standard)', megapixels: 0.9, selectorWidth: 832, selectorHeight: 1120, finalWidth: 832, finalHeight: 1088, status: 'contract_verified' },
 ]
 
 export const H3_WORKFLOW_PROFILES: readonly H3WorkflowProfile[] = [{
@@ -48,4 +63,12 @@ export const H3_WORKFLOW_PROFILES: readonly H3WorkflowProfile[] = [{
 }]
 
 export const workflowProfileRegistry = { list: () => H3_WORKFLOW_PROFILES, get: (id: H3WorkflowProfileId) => H3_WORKFLOW_PROFILES.find(profile => profile.id === id) ?? null, mode: (profileId: H3WorkflowProfileId, mode: H3WorkflowMode) => H3_WORKFLOW_PROFILES.find(profile => profile.id === profileId)?.modes.find(item => item.id === mode) ?? null }
+export function profileRuntimeStatus(profile: H3WorkflowProfile): H3WorkflowProfile['status'] {
+  // I2V has a recorded H3-originated product render; older profile metadata
+  // used the legacy `verified` spelling. Present it consistently with T2V.
+  return profile.id === 'ltx_2_5_image_to_video' ? 'runtime_verified' : profile.status
+}
+export function workflowPresets(profile: H3WorkflowProfile): readonly H3WorkflowPreset[] {
+  return profile.id.startsWith('ltx_2_5_') ? LTX_2_5_PRESETS : profile.presets ?? []
+}
 export function modelManifestStatus(profile: H3WorkflowProfile, installedFilenames: ReadonlySet<string>): { ready: boolean; missing: string[] } { const missing = profile.requiredModels.filter(model => model.required && model.expectedFilename && !installedFilenames.has(model.expectedFilename)).map(model => model.expectedFilename!); return { ready: (profile.status === 'verified' || profile.status === 'runtime_verified') && missing.length === 0, missing } }

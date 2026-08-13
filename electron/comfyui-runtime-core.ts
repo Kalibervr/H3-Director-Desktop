@@ -6,7 +6,7 @@ export type ComfyRuntimeState = 'not_configured' | 'starting' | 'checking' | 're
 export interface ComfyRuntimeConfig { rootPath: string; pythonPath: string; port: number; autoLaunch: boolean; sageAttention?: boolean; extraModelPathsConfig?: string; inputDirectory?: string; outputDirectory?: string; ollamaEndpoint?: string; ollamaModel?: string; ollamaAutoStart?: boolean }
 export interface ComfyRuntimeStatus { state: ComfyRuntimeState; owned: boolean; pid: number | null; endpoint: string | null; version: string | null; error: string | null; diagnostics: string[] }
 export interface ComfyRuntimeDependencies { getConfig: () => ComfyRuntimeConfig; saveConfig: (config: ComfyRuntimeConfig) => void; getBackend: () => { url: string | null; token: string | null }; spawn?: typeof spawn }
-const defaults: ComfyRuntimeConfig = { rootPath: '', pythonPath: '', port: 8188, autoLaunch: false }
+const defaults: ComfyRuntimeConfig = { rootPath: '', pythonPath: '', port: 8188, autoLaunch: false, ollamaEndpoint: 'http://127.0.0.1:11434', ollamaModel: 'qwen3:4b', ollamaAutoStart: true }
 
 export class ComfyRuntimeCore {
   private managed: ChildProcess | null = null

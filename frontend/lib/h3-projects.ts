@@ -121,6 +121,8 @@ export interface H3Scene {
   reference_image: string | null
   reference_fit: H3ReferenceFit
   ltx_prompt_enhance: boolean
+  workflow_profile_id: H3WorkflowProfileId
+  workflow_mode: H3WorkflowMode
   aspect_ratio: H3AspectRatio
   resolution_megapixels: H3ResolutionMegapixels
   width: number
@@ -146,7 +148,7 @@ export interface H3Scene {
 }
 
 export interface H3Project {
-  schema_version: 12
+  schema_version: 13
   id: string
   name: string
   created_at: string
@@ -202,6 +204,11 @@ export async function deleteH3Scene(projectId: string, sceneId: string): Promise
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}`, { method: 'DELETE' }))
 }
 
+export async function deleteH3Project(projectId: string): Promise<void> {
+  const response = await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}`, { method: 'DELETE' })
+  if (!response.ok) throw new Error((await response.json() as { message?: string }).message || 'The project could not be moved to H3 Director Trash.')
+}
+
 export async function reorderH3Scenes(projectId: string, sceneIds: string[]): Promise<H3Project> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/reorder`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scene_ids: sceneIds }),
@@ -210,6 +217,10 @@ export async function reorderH3Scenes(projectId: string, sceneIds: string[]): Pr
 
 export async function prepareH3Continuity(projectId: string, sceneId: string): Promise<{ project: H3Project; artifact: H3ContinuityArtifact }> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/continuity`, { method: 'POST' }))
+}
+
+export async function continueH3FromPrevious(projectId: string, sceneId: string): Promise<{ project: H3Project; artifact: H3ContinuityArtifact }> {
+  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/continue-from-previous`, { method: 'POST' }))
 }
 
 export async function getH3Project(projectId: string): Promise<H3Project> {
@@ -224,7 +235,7 @@ export async function updateH3Project(projectId: string, update: Partial<Pick<H3
 
 export const renameH3Project = (projectId: string, name: string) => updateH3Project(projectId, { name })
 
-export async function updateH3Scene(projectId: string, sceneId: string, update: Partial<Pick<H3Scene, 'name' | 'prompt' | 'audio_mode' | 'no_speech' | 'no_music' | 'custom_audio_instruction' | 'reference_image' | 'reference_fit' | 'ltx_prompt_enhance' | 'aspect_ratio' | 'resolution_megapixels' | 'width' | 'height' | 'fps' | 'duration_seconds' | 'frame_count' | 'seed' | 'selected_render_version_id' | 'mode' | 'continuity_strategy' | 'continuity_offset_frames'>>): Promise<H3Project> {
+export async function updateH3Scene(projectId: string, sceneId: string, update: Partial<Pick<H3Scene, 'name' | 'prompt' | 'audio_mode' | 'no_speech' | 'no_music' | 'custom_audio_instruction' | 'reference_image' | 'reference_fit' | 'ltx_prompt_enhance' | 'workflow_profile_id' | 'workflow_mode' | 'aspect_ratio' | 'resolution_megapixels' | 'width' | 'height' | 'fps' | 'duration_seconds' | 'frame_count' | 'seed' | 'selected_render_version_id' | 'mode' | 'continuity_strategy' | 'continuity_offset_frames'>>): Promise<H3Project> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(update),
   }))

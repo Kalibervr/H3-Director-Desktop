@@ -21,6 +21,7 @@ import requests
 
 from server_utils.loopback_url import require_loopback_http_url
 from services.comfyui_minimax_h3_provider import ProviderError, RenderResult, VideoProbe, probe_video
+from services.ltx_2_5_geometry import is_ltx_product_validation_preset
 
 JsonObject = dict[str, Any]
 LTX_T2V_WORKFLOW_SHA256 = "237abb5a9e1c15fb1e29e5e22eecf2e17a84d23d7b06e3fd0ab18c2efadbd367"
@@ -108,10 +109,8 @@ def validate_ltx_t2v_workflow(workflow: JsonObject, object_info: JsonObject) -> 
 def build_ltx_t2v_prompt_payload(template: JsonObject, request: LtxT2VRequest, client_id: str) -> JsonObject:
     if not request.prompt.strip():
         raise ProviderError("A prompt is required.")
-    expected = ("16:9 (Widescreen)", 0.9, 1280, 704, 24, 5.0, 121)
-    actual = (request.aspect_ratio, request.resolution_megapixels, request.width, request.height, request.fps, request.duration_seconds, request.frame_count)
-    if actual != expected or not 0 <= request.seed <= 0xFFFFFFFFFFFFFFFF:
-        raise ProviderError("Only the verified LTX 2.5 T2V configuration is supported.")
+    if not is_ltx_product_validation_preset(request.aspect_ratio, request.resolution_megapixels, request.width, request.height) or (request.fps, request.duration_seconds, request.frame_count) != (24, 5.0, 121) or not 0 <= request.seed <= 0xFFFFFFFFFFFFFFFF:
+        raise ProviderError("Only the runtime-verified LTX configuration or an approved supervised validation preset is supported.")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", request.output_filename_prefix):
         raise ProviderError("Output filename prefix contains unsupported characters.")
     workflow = copy.deepcopy(template)
@@ -195,7 +194,7 @@ class ComfyUILtx25T2VProvider:
             time.sleep(2.0)
         if source is None: raise ProviderError("The local LTX T2V render timed out.")
         video = probe_video(self._ffprobe_path, source)
-        if (video.width, video.height, video.frame_count, video.audio_present) != (1280, 704, 121, True) or video.fps not in {"24", "24/1"} or abs(video.duration_seconds - 5.0) > .25:
+        if (video.width, video.height, video.frame_count, video.audio_present) != (request.width, request.height, request.frame_count, True) or video.fps not in {"24", "24/1"} or abs(video.duration_seconds - request.duration_seconds) > .25:
             raise ProviderError("The LTX T2V output does not match the verified video and audio contract.")
         directory, output, metadata = self._adopt(source, prompt_id, request, video, time.monotonic() - started)
         return RenderResult(prompt_id, source, directory, output, metadata, video)

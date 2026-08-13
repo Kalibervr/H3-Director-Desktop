@@ -148,6 +148,14 @@ def route_h3_project_update(
     return handler.comfyui_minimax_h3.update_project(project_id, request)
 
 
+@router.delete("/projects/{project_id}", status_code=204)
+def route_h3_project_delete(
+    project_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> None:
+    handler.comfyui_minimax_h3.delete_project(project_id)
+
+
 @router.patch("/projects/{project_id}/scenes/{scene_id}", response_model=H3Project)
 def route_h3_scene_update(
     project_id: str,
@@ -230,6 +238,18 @@ def route_h3_scene_continuity(
     handler: AppHandler = Depends(get_state_service),
 ) -> H3ContinuityPrepareResponse:
     return handler.comfyui_minimax_h3.prepare_continuity(project_id, scene_id)
+
+
+@router.post(
+    "/projects/{project_id}/scenes/{scene_id}/continue-from-previous",
+    response_model=H3ContinuityPrepareResponse,
+)
+def route_h3_scene_continue_from_previous(
+    project_id: str,
+    scene_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> H3ContinuityPrepareResponse:
+    return handler.comfyui_minimax_h3.continue_from_previous(project_id, scene_id)
 
 
 @router.post("/projects/{project_id}/sequences", response_model=H3RenderRun)

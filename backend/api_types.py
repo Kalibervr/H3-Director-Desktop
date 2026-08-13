@@ -279,6 +279,11 @@ class H3Scene(BaseModel):
     reference_image: str | None
     reference_fit: Literal["fill_crop", "fit", "stretch"] = "fill_crop"
     ltx_prompt_enhance: bool = False
+    # A scene retains its own generation contract so visual-frame continuation can
+    # transition the *next* scene from a prompt-only/T2V source to its matching
+    # I2V profile without rewriting the completed source scene.
+    workflow_profile_id: H3WorkflowProfileId = "minimax_h3_image_to_video"
+    workflow_mode: H3WorkflowMode = "image_to_video"
     aspect_ratio: H3AspectRatio = "1:1 (Square)"
     resolution_megapixels: H3ResolutionMegapixels = 0.4
     width: int = Field(ge=1)
@@ -336,7 +341,7 @@ class H3RenderRun(BaseModel):
 
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[12]
+    schema_version: Literal[13]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str
@@ -384,6 +389,8 @@ class H3SceneUpdateRequest(BaseModel):
     reference_image: str | None = None
     reference_fit: Literal["fill_crop", "fit", "stretch"] | None = None
     ltx_prompt_enhance: bool | None = None
+    workflow_profile_id: H3WorkflowProfileId | None = None
+    workflow_mode: H3WorkflowMode | None = None
     aspect_ratio: H3AspectRatio | None = None
     resolution_megapixels: H3ResolutionMegapixels | None = None
     width: int | None = Field(default=None, ge=1)

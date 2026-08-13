@@ -6,7 +6,7 @@ H3 Director profiles are declarative local packages. They describe a verified mo
 
 `minimax_h3_image_to_video` is the first verified profile. It retains the established MiniMax H3 Image-to-Video workflow, 1:1/16:9/9:16 resolution tiers, fixed 24 FPS, frame constraints, reference fit, audio guidance, continuity, editor provenance, and RTX VSR derived-output compatibility.
 
-Projects persist `workflow_profile_id` and `workflow_mode`. Schema 10 and older projects migrate atomically through schema 11; schema 11 projects migrate atomically to schema 12 with `ltx_prompt_enhance=false`. Existing MiniMax projects remain `minimax_h3_image_to_video` / `image_to_video`; renders, continuity artifacts, editor links, and derived variants are unchanged.
+Projects persist a project default plus each scene's `workflow_profile_id` and `workflow_mode`. Schema 12 projects migrate atomically to schema 13 by assigning every existing scene its project's existing contract. This preserves renders, continuity artifacts, editor links, selected versions, and derived variants while allowing only a *next* scene to transition to a compatible I2V contract.
 
 ## Package format
 
@@ -34,7 +34,11 @@ Before enabling a new model, verify its local license/distribution terms, local 
 
 ## MiniMax H3 no-reference contract
 
-`minimax_h3_no_reference` is an enabled `runtime_verified` Prompt Only profile. The installed `MiniMaxH3ImageToVideo` node is used with both optional image inputs omitted; it is documented in [MINIMAX_H3_NO_REFERENCE_WORKFLOW_CONTRACT.md](MINIMAX_H3_NO_REFERENCE_WORKFLOW_CONTRACT.md). One H3 Director-originated project render verified only 1:1 / 640×640 / 24 FPS / 5 seconds / 124 frames with audio. It is not presented as a separately proven MiniMax Text-to-Video model. Image-based continuity, reference controls, and all other Prompt Only resolutions, durations, and FPS values remain unavailable.
+`minimax_h3_no_reference` is an enabled `runtime_verified` Prompt Only profile. The installed `MiniMaxH3ImageToVideo` node is used with both optional image inputs omitted; it is documented in [MINIMAX_H3_NO_REFERENCE_WORKFLOW_CONTRACT.md](MINIMAX_H3_NO_REFERENCE_WORKFLOW_CONTRACT.md). One H3 Director-originated project render verified only 1:1 / 640×640 / 24 FPS / 5 seconds / 124 frames with audio. It is not presented as a separately proven MiniMax Text-to-Video model.
+
+## Visual-frame continuation across modes
+
+Prompt Only and LTX Text-to-Video remain independent generation contracts: they never receive an image upload, `first_frame`, or `last_frame`. A completed selected render version can nevertheless be the visual source for the following scene. H3 Director extracts an immutable last-valid or offset-from-end PNG using the existing FFmpeg extractor, records source scene/version/hash/frame provenance, and switches only that next scene within the same model family to its verified Image-to-Video profile. This is visual-frame continuity, not latent or hidden-state continuity. MiniMax Prompt Only transitions to MiniMax I2V; LTX T2V transitions to LTX I2V. Cross-family transitions are not automatic.
 
 ### Turbo and LoRA variants
 

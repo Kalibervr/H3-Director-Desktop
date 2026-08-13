@@ -50,6 +50,7 @@ from services.comfyui_minimax_h3_provider import (
 )
 from services.comfyui_ltx_2_5_provider import ComfyUILtx25I2VProvider, LtxI2VRequest
 from services.comfyui_ltx_2_5_t2v_provider import ComfyUILtx25T2VProvider, LtxT2VRequest
+from services.ltx_2_5_geometry import is_ltx_product_validation_preset
 from services.comfyui_runtime_probe import ComfyUIRuntimeProbe
 from server_utils.loopback_url import require_loopback_http_url
 from services.h3_project_store import H3ProjectStore, ProjectStoreError
@@ -189,6 +190,9 @@ class ComfyUIMiniMaxH3Handler:
     def delete_scene(self, project_id: str, scene_id: str) -> H3Project:
         return self._project_call(lambda: self._project_store.delete_scene(project_id, scene_id))
 
+    def delete_project(self, project_id: str) -> None:
+        self._project_call(lambda: self._project_store.delete_project(project_id))
+
     def reorder_scenes(self, project_id: str, request: H3SceneReorderRequest) -> H3Project:
         return self._project_call(lambda: self._project_store.reorder_scenes(project_id, request.scene_ids))
 
@@ -305,6 +309,35 @@ class ComfyUIMiniMaxH3Handler:
         except (ProjectStoreError, ContinuityError) as exc:
             raise HTTPError(422, str(exc), code="H3_CONTINUITY_ERROR") from exc
 
+    def continue_from_previous(self, project_id: str, scene_id: str) -> H3ContinuityPrepareResponse:
+        """Configure visual-frame continuation within a verified model family."""
+        try:
+            project = self._project_store.get_project(project_id)
+            source = previous_scene(project, scene_id)
+            target = next((item for item in project.scenes if item.id == scene_id), None)
+            if target is None:
+                raise ProjectStoreError("The selected scene could not be found.")
+            transitions = {
+                "minimax_h3_no_reference": ("minimax_h3_image_to_video", "image_to_video"),
+                "ltx_2_5_text_to_video": ("ltx_2_5_image_to_video", "image_to_video"),
+            }
+            destination = transitions.get(source.workflow_profile_id)
+            if destination is None:
+                if source.workflow_profile_id not in {"minimax_h3_image_to_video", "ltx_2_5_image_to_video"}:
+                    raise ProjectStoreError("This completed scene has no verified image-to-video continuation path.")
+                destination = (source.workflow_profile_id, source.workflow_mode)
+            project = self._project_store.update_scene(project_id, scene_id, H3SceneUpdateRequest(
+                workflow_profile_id=destination[0], workflow_mode=destination[1], mode="continue_previous",
+                reference_image=None,
+            ))
+            scene = next(item for item in project.scenes if item.id == scene_id)
+            paths = resolve_h3_runtime_paths()
+            artifact = H3ContinuityExtractor(paths.ffmpeg, paths.ffprobe).extract(project, scene)
+            project = self._project_store.add_continuity_artifact(project_id, scene_id, artifact)
+            return H3ContinuityPrepareResponse(project=project, artifact=artifact)
+        except (ProjectStoreError, ContinuityError) as exc:
+            raise HTTPError(422, str(exc), code="H3_CONTINUITY_ERROR") from exc
+
     def start_sequence(self, project_id: str, request: H3SequenceStartRequest) -> H3RenderRun:
         project = self._project_store.get_project(project_id)
         if project.workflow_profile_id != "minimax_h3_image_to_video":
@@ -406,17 +439,18 @@ class ComfyUIMiniMaxH3Handler:
     ) -> H3Project:
         try:
             project = self._project_store.get_project(project_id)
-            if project.workflow_profile_id == "ltx_2_5_image_to_video":
-                return self._render_ltx_i2v_project_scene(project, scene_id, request)
-            if project.workflow_profile_id == "ltx_2_5_text_to_video":
-                return self._render_ltx_t2v_project_scene(project, scene_id, request)
-            if project.workflow_profile_id == "minimax_h3_no_reference":
-                return self._render_minimax_h3_no_reference_project_scene(project, scene_id, request)
-            if project.workflow_profile_id != "minimax_h3_image_to_video":
-                raise ProjectStoreError("This workflow profile is not verified for local rendering.")
             scene = next((item for item in project.scenes if item.id == scene_id), None)
             if scene is None:
                 raise ProjectStoreError("The selected scene could not be found.")
+            profile_id = scene.workflow_profile_id
+            if profile_id == "ltx_2_5_image_to_video":
+                return self._render_ltx_i2v_project_scene(project, scene_id, request)
+            if profile_id == "ltx_2_5_text_to_video":
+                return self._render_ltx_t2v_project_scene(project, scene_id, request)
+            if profile_id == "minimax_h3_no_reference":
+                return self._render_minimax_h3_no_reference_project_scene(project, scene_id, request)
+            if profile_id != "minimax_h3_image_to_video":
+                raise ProjectStoreError("This workflow profile is not verified for local rendering.")
             if not scene.prompt.strip():
                 raise ProjectStoreError("The scene requires a prompt before rendering.")
             input_image = self._resolve_render_input(project, scene)
@@ -592,12 +626,10 @@ class ComfyUIMiniMaxH3Handler:
         scene = next((item for item in project.scenes if item.id == scene_id), None)
         if scene is None:
             raise ProjectStoreError("The selected scene could not be found.")
-        if not scene.prompt.strip() or not scene.reference_image:
-            raise ProjectStoreError("LTX 2.5 Image-to-Video requires both a prompt and reference image.")
-        if (scene.aspect_ratio, scene.resolution_megapixels, scene.width, scene.height, scene.fps, scene.duration_seconds, scene.frame_count) != (
-            "16:9 (Widescreen)", 0.9, 1280, 704, 24, 5.0, 121,
-        ):
-            raise ProjectStoreError("Only the verified LTX 2.5 I2V 16:9 / 0.9 MP / 24 FPS / 5-second profile is enabled.")
+        if not scene.prompt.strip():
+            raise ProjectStoreError("LTX 2.5 Image-to-Video requires a prompt.")
+        if not is_ltx_product_validation_preset(scene.aspect_ratio, scene.resolution_megapixels, scene.width, scene.height) or (scene.fps, scene.duration_seconds, scene.frame_count) != (24, 5.0, 121):
+            raise ProjectStoreError("Only the runtime-verified LTX configuration or an approved supervised validation preset is supported.")
         scene_root = Path(project.project_root) / "scenes" / scene.storage_name
         paths = resolve_ltx_i2v_runtime_paths(scene_root / "renders")
         provider = ComfyUILtx25I2VProvider(
@@ -606,14 +638,15 @@ class ComfyUIMiniMaxH3Handler:
         )
         self._project_store.set_scene_status(project.id, scene.id, "rendering", error=None, phase="Submitting LTX 2.5")
         try:
+            input_image = self._resolve_render_input(project, scene)
             result = provider.render(
                 base_url=request.base_url,
                 request=LtxI2VRequest(
-                    prompt=scene.prompt, input_image=Path(scene.reference_image), seed=scene.seed,
+                    prompt=scene.prompt, input_image=input_image, seed=scene.seed,
                     prompt_enhance=scene.ltx_prompt_enhance, aspect_ratio=scene.aspect_ratio,
                     resolution_megapixels=scene.resolution_megapixels, width=scene.width, height=scene.height,
                     duration_seconds=scene.duration_seconds, fps=scene.fps, frame_count=scene.frame_count,
-                    output_filename_prefix=f"ltx_scene_{scene.order:03d}",
+                    output_filename_prefix=f"ltx_scene_{scene.order:03d}", reference_fit=scene.reference_fit,
                 ),
             )
             payload = json.loads(result.metadata_file.read_text(encoding="utf-8"))
@@ -622,7 +655,7 @@ class ComfyUIMiniMaxH3Handler:
                 id=result.render_directory.name, number=number, created_at=str(payload["created_at"]),
                 root=str(result.render_directory), video_file=str(result.output_file), metadata_file=str(result.metadata_file),
                 prompt=scene.prompt, final_prompt=scene.prompt, audio_mode="natural_ambience", no_speech=False,
-                no_music=False, custom_audio_instruction="", input_image_reference=str(scene.reference_image),
+                no_music=False, custom_audio_instruction="", input_image_reference=str(input_image),
                 seed=scene.seed, width=scene.width, height=scene.height, fps=scene.fps,
                 duration_seconds=scene.duration_seconds, frame_count=result.video.frame_count, prompt_id=result.prompt_id,
                 input_image_sha256=str(payload["input_image_sha256"]), workflow_sha256=str(payload["workflow_sha256"]),
@@ -639,8 +672,8 @@ class ComfyUIMiniMaxH3Handler:
         scene = next((item for item in project.scenes if item.id == scene_id), None)
         if scene is None: raise ProjectStoreError("The selected scene could not be found.")
         if not scene.prompt.strip(): raise ProjectStoreError("LTX 2.5 Text-to-Video requires a prompt.")
-        if (scene.aspect_ratio, scene.resolution_megapixels, scene.width, scene.height, scene.fps, scene.duration_seconds, scene.frame_count) != ("16:9 (Widescreen)", 0.9, 1280, 704, 24, 5.0, 121):
-            raise ProjectStoreError("Only the verified LTX 2.5 T2V 16:9 / 0.9 MP / 24 FPS / 5-second profile is enabled.")
+        if not is_ltx_product_validation_preset(scene.aspect_ratio, scene.resolution_megapixels, scene.width, scene.height) or (scene.fps, scene.duration_seconds, scene.frame_count) != (24, 5.0, 121):
+            raise ProjectStoreError("Only the runtime-verified LTX configuration or an approved supervised validation preset is supported.")
         scene_root = Path(project.project_root) / "scenes" / scene.storage_name
         paths = resolve_ltx_t2v_runtime_paths(scene_root / "renders")
         provider = ComfyUILtx25T2VProvider(workflow_path=paths.workflow, output_root=paths.comfyui_output, render_root=paths.render_root, ffprobe_path=paths.ffprobe)

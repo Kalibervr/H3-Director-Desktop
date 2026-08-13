@@ -5,7 +5,7 @@ export type { OllamaRuntimeConfig, OllamaRuntimeStatus, OllamaRuntimeState } fro
 const runtime = new OllamaRuntimeCore({
   getConfig: () => {
     const config = (readAppState().comfyuiRuntime ?? {}) as { ollamaAutoStart?: boolean; ollamaEndpoint?: string; ollamaModel?: string }
-    return { autoStart: Boolean(config.ollamaAutoStart), endpoint: config.ollamaEndpoint ?? 'http://127.0.0.1:11434', model: config.ollamaModel }
+    return { autoStart: config.ollamaAutoStart ?? true, endpoint: config.ollamaEndpoint ?? 'http://127.0.0.1:11434', model: config.ollamaModel ?? 'qwen3:4b' }
   },
   saveConfig: config => { const state = readAppState(); state.comfyuiRuntime = { ...(state.comfyuiRuntime as object ?? {}), ollamaAutoStart: config.autoStart, ollamaEndpoint: config.endpoint, ollamaModel: config.model }; writeAppState(state) },
 })

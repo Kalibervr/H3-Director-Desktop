@@ -44,5 +44,11 @@ def test_captured_ltx_i2v_fields_map_without_mutating_template() -> None:
     {"fps": 30}, {"duration_seconds": 10.0}, {"frame_count": 124},
 ])
 def test_unverified_ltx_i2v_configuration_is_rejected(changes: dict[str, object]) -> None:
-    with pytest.raises(ProviderError, match="verified LTX 2.5 I2V configuration"):
+    with pytest.raises(ProviderError, match="approved supervised validation preset"):
         build_ltx_i2v_prompt_payload(_template(), _request(**changes), "staged.png", "abc")
+
+
+@pytest.mark.parametrize("ratio,width,height", [("9:16 (Portrait Widescreen)", 704, 1280), ("1:1 (Square)", 960, 960)])
+def test_supervised_ltx_i2v_geometry_candidate_maps_to_selector(ratio: str, width: int, height: int) -> None:
+    payload = build_ltx_i2v_prompt_payload(_template(), _request(aspect_ratio=ratio, width=width, height=height), "staged.png", "abc")
+    assert payload["prompt"]["403"]["inputs"]["aspect_ratio"] == ratio

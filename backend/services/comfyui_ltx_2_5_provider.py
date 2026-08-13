@@ -20,7 +20,8 @@ import requests
 from PIL import Image
 
 from server_utils.loopback_url import require_loopback_http_url
-from services.comfyui_minimax_h3_provider import ProviderError, RenderResult, VideoProbe, probe_video
+from services.comfyui_minimax_h3_provider import ProviderError, RenderResult, VideoProbe, preprocess_reference_image, probe_video
+from services.ltx_2_5_geometry import is_ltx_product_validation_preset
 
 JsonObject = dict[str, Any]
 LTX_I2V_WORKFLOW_SHA256 = "37865EF49D4F51F01365BBF362D7A57A294712DD8029620D86904AEAB2A0B0EA".lower()
@@ -58,6 +59,7 @@ class LtxI2VRequest:
     fps: int
     frame_count: int
     output_filename_prefix: str
+    reference_fit: str = "fill_crop"
 
 
 def _object(value: object) -> JsonObject:
@@ -86,10 +88,8 @@ def build_ltx_i2v_prompt_payload(template: JsonObject, request: LtxI2VRequest, s
     """Map only the node fields verified in the completed I2V history entry."""
     if not request.prompt.strip():
         raise ProviderError("A prompt is required.")
-    if (request.aspect_ratio, request.resolution_megapixels, request.width, request.height, request.fps, request.duration_seconds, request.frame_count) != (
-        "16:9 (Widescreen)", 0.9, 1280, 704, 24, 5.0, 121,
-    ):
-        raise ProviderError("Only the locally verified LTX 2.5 I2V configuration is currently supported.")
+    if not is_ltx_product_validation_preset(request.aspect_ratio, request.resolution_megapixels, request.width, request.height) or (request.fps, request.duration_seconds, request.frame_count) != (24, 5.0, 121):
+        raise ProviderError("Only the runtime-verified LTX configuration or an approved supervised validation preset is supported.")
     if request.seed < 0 or request.seed > 0xFFFFFFFFFFFFFFFF:
         raise ProviderError("Seed is outside the verified node range.")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", request.output_filename_prefix):
@@ -166,7 +166,13 @@ class ComfyUILtx25I2VProvider:
                 image.verify()
         except (OSError, ValueError) as exc:
             raise ProviderError("The input image is invalid.") from exc
-        staged = self._upload_image(normalized, request.input_image)
+        # The original remains immutable.  LTX gets the same exact-final-size
+        # fit staging policy already used by the MiniMax I2V provider.
+        staged_source = preprocess_reference_image(request.input_image, request.width, request.height, request.reference_fit)
+        try:
+            staged = self._upload_image(normalized, staged_source)
+        finally:
+            staged_source.unlink(missing_ok=True)
         client_id = uuid.uuid4().hex
         payload = build_ltx_i2v_prompt_payload(template, request, staged, client_id)
         try:
@@ -194,7 +200,7 @@ class ComfyUILtx25I2VProvider:
         if source is None:
             raise ProviderError("The local LTX render timed out.")
         video = probe_video(self._ffprobe_path, source)
-        if (video.width, video.height, video.frame_count, video.audio_present) != (1280, 704, 121, True):
+        if (video.width, video.height, video.frame_count, video.audio_present) != (request.width, request.height, request.frame_count, True):
             raise ProviderError("The LTX output does not match the verified video and audio contract.")
         if video.fps not in {"24/1", "24"} or abs(video.duration_seconds - 5.0) > 0.25:
             raise ProviderError("The LTX output does not match the verified timing contract.")

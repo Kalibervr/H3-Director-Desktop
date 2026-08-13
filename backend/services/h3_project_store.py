@@ -21,6 +21,7 @@ from api_types import (
     H3Scene,
     H3SceneUpdateRequest,
 )
+from services.ltx_2_5_geometry import resolve_ltx_geometry
 
 
 class ProjectStoreError(RuntimeError):
@@ -115,7 +116,7 @@ class H3ProjectStore:
         except OSError as exc:
             raise ProjectStoreError("The local project folder could not be created.") from exc
         timestamp = _now()
-        scenes = [self._new_scene(number, _scene_storage_name(number)) for number in range(1, scene_count + 1)]
+        scenes = [self._new_scene(number, _scene_storage_name(number), workflow_profile_id=workflow_profile_id, workflow_mode=workflow_mode) for number in range(1, scene_count + 1)]
         if workflow_profile_id == "ltx_2_5_image_to_video":
             # Preserve the independently verified I2V profile settings.
             scenes = [scene.model_copy(update={
@@ -143,7 +144,7 @@ class H3ProjectStore:
         if sequence_mode == "continuous_sequence":
             scenes = [scene.model_copy(update={"mode": "new_shot" if scene.order == 1 else "continue_previous"}) for scene in scenes]
         project = H3Project(
-            schema_version=12,
+            schema_version=13,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
@@ -191,6 +192,23 @@ class H3ProjectStore:
         project = self.get_project(project_id)
         return self.save_project(project.model_copy(update={"name": cleaned}))
 
+    def delete_project(self, project_id: str) -> None:
+        """Recoverably archive one app-owned project without following external paths."""
+        project = self.get_project(project_id)
+        self._require_no_active_run(project)
+        root = Path(project.project_root).resolve()
+        try:
+            root.relative_to(self.projects_root)
+        except ValueError as exc:
+            raise ProjectStoreError("Only app-owned H3 Director projects can be deleted.") from exc
+        trash_root = self.projects_root / ".trash"
+        destination = trash_root / f"{project.id}-{uuid.uuid4().hex[:8]}"
+        try:
+            trash_root.mkdir(parents=True, exist_ok=True)
+            os.replace(root, destination)
+        except OSError as exc:
+            raise ProjectStoreError("The project could not be moved to H3 Director Trash safely.") from exc
+
     def update_project(self, project_id: str, *, name: str | None = None, sequence_mode: str | None = None, workflow_profile_id: str | None = None, workflow_mode: str | None = None) -> H3Project:
         project = self.get_project(project_id)
         changes: dict[str, str] = {}
@@ -218,7 +236,12 @@ class H3ProjectStore:
         aspect_ratio = changes.get("aspect_ratio", target.aspect_ratio)
         megapixels = changes.get("resolution_megapixels", target.resolution_megapixels)
         if "aspect_ratio" in changes or "resolution_megapixels" in changes:
-            changes["width"], changes["height"] = H3_RESOLUTION_PRESETS[aspect_ratio][megapixels]
+            scene_profile_id = changes.get("workflow_profile_id", target.workflow_profile_id)
+            if scene_profile_id in {"ltx_2_5_image_to_video", "ltx_2_5_text_to_video"}:
+                geometry = resolve_ltx_geometry(aspect_ratio, megapixels)
+                changes["width"], changes["height"] = geometry.final_width, geometry.final_height
+            else:
+                changes["width"], changes["height"] = H3_RESOLUTION_PRESETS[aspect_ratio][megapixels]
         for scene in project.scenes:
             if scene.id != scene_id:
                 scenes.append(scene)
@@ -434,7 +457,10 @@ class H3ProjectStore:
             raise ProjectStoreError("Scene order cannot change while a render queue is active.")
 
     @staticmethod
-    def _new_scene(order: int, storage_name: str, source: H3Scene | None = None) -> H3Scene:
+    def _new_scene(
+        order: int, storage_name: str, source: H3Scene | None = None,
+        workflow_profile_id: str = "minimax_h3_image_to_video", workflow_mode: str = "image_to_video",
+    ) -> H3Scene:
         return H3Scene(
             id=uuid.uuid4().hex,
             storage_name=storage_name,
@@ -448,6 +474,8 @@ class H3ProjectStore:
             reference_image=source.reference_image if source else None,
             reference_fit=source.reference_fit if source else "fill_crop",
             ltx_prompt_enhance=source.ltx_prompt_enhance if source else False,
+            workflow_profile_id=source.workflow_profile_id if source else workflow_profile_id,
+            workflow_mode=source.workflow_mode if source else workflow_mode,
             aspect_ratio=source.aspect_ratio if source else "1:1 (Square)",
             resolution_megapixels=source.resolution_megapixels if source else 0.4,
             width=source.width if source else 640,
@@ -509,16 +537,18 @@ class H3ProjectStore:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             original_schema = payload.get("schema_version")
-            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11}
+            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
             if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
             if migrated:
-                payload["schema_version"] = 12
+                payload["schema_version"] = 13
                 payload.setdefault("sequence_mode", "independent_shots")
                 payload.setdefault("workflow_profile_id", "minimax_h3_image_to_video")
                 payload.setdefault("workflow_mode", "image_to_video")
                 for scene in payload.get("scenes", []):
+                    scene.setdefault("workflow_profile_id", payload["workflow_profile_id"])
+                    scene.setdefault("workflow_mode", payload["workflow_mode"])
                     scene.setdefault("mode", "new_shot")
                     scene.setdefault("reference_fit", "fill_crop")
                     scene.setdefault("ltx_prompt_enhance", False)

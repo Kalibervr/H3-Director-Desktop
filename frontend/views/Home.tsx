@@ -12,12 +12,14 @@ import { readProject, readProjectIds, writeProject, writeProjectIds } from '../l
 import { getH3RuntimeStatus, type ComfyUIStatus } from '../lib/h3-generation'
 import { composeH3AudioPrompt, h3AudioSummary } from '../lib/h3-audio-guidance'
 import { getOllamaStatus, localPromptAssistant, OllamaH3PromptAssistant, type H3OllamaStatus } from '../lib/h3-prompt-assistant'
-import { H3_WORKFLOW_PROFILES, LTX_2_5_OFFICIAL_MODEL_PAGE, workflowProfileRegistry } from '../lib/h3-workflow-profiles'
+import { H3_WORKFLOW_PROFILES, LTX_2_5_OFFICIAL_MODEL_PAGE, profileRuntimeStatus, workflowProfileRegistry } from '../lib/h3-workflow-profiles'
 import { WorkflowRuntimeCenter } from '../components/WorkflowRuntimeCenter'
 import { RTX_VSR_SETUP_REQUIRED, createUpscaleVariantPlan } from '../lib/h3-upscale'
 import {
   createH3Project,
   addH3Scene,
+  continueH3FromPrevious,
+  deleteH3Project,
   deleteH3Scene,
   duplicateH3Scene,
   getH3Project,
@@ -145,12 +147,13 @@ export function Home() {
   const previewVideoRef = useRef<HTMLVideoElement | null>(null)
   const pendingSave = useRef<{ projectId: string; sceneId: string; changes: Partial<H3Scene> } | null>(null)
   const scene = selectedScene(project)
-  const selectedWorkflowProfile = project ? workflowProfileRegistry.get(project.workflow_profile_id) : null
-  const selectedWorkflowMode = selectedWorkflowProfile && project ? workflowProfileRegistry.mode(project.workflow_profile_id, project.workflow_mode) : null
-  const profileAspectRatios = selectedWorkflowMode?.aspectRatios.length ? selectedWorkflowMode.aspectRatios : ['1:1 (Square)', '16:9 (Widescreen)', '9:16 (Portrait Widescreen)'] as const
+  const selectedWorkflowProfile = scene ? workflowProfileRegistry.get(scene.workflow_profile_id) : null
+  const selectedWorkflowMode = selectedWorkflowProfile && scene ? workflowProfileRegistry.mode(scene.workflow_profile_id, scene.workflow_mode) : null
+  const ltxProfile = scene?.workflow_profile_id.startsWith('ltx_2_5_') ?? false
+  const profileAspectRatios = ltxProfile ? ['16:9 (Widescreen)', '9:16 (Portrait Widescreen)', '1:1 (Square)'] as const : selectedWorkflowMode?.aspectRatios.length ? selectedWorkflowMode.aspectRatios : ['1:1 (Square)', '16:9 (Widescreen)', '9:16 (Portrait Widescreen)'] as const
   const profileResolutionMegapixels = selectedWorkflowMode?.resolutionMegapixels.length ? selectedWorkflowMode.resolutionMegapixels : [0.4, 0.6, 0.8, 1] as const
   const managedBaseUrl = lifecycle?.endpoint ?? `http://127.0.0.1:${runtimeConfig?.port ?? 8190}`
-  const ollamaEndpoint = 'http://127.0.0.1:11434'
+  const ollamaEndpoint = runtimeConfig?.ollamaEndpoint ?? 'http://127.0.0.1:11434'
   const activeRun = project?.render_runs.find(run => run.status === 'running') ?? null
   const latestRun = activeRun ?? project?.render_runs.at(-1) ?? null
   const viewedRun = project?.render_runs.find(run => run.id === selectedRunId) ?? latestRun
@@ -457,12 +460,14 @@ export function Home() {
   }
 
   const prepareContinuity = async () => {
-    if (!project || !scene || scene.mode !== 'continue_previous') return
+    if (!project || !scene) return
     setPreparingContinuity(true)
     setWorkspaceError(null)
     try {
       await flushPendingSave()
-      const response = await prepareH3Continuity(project.id, scene.id)
+      const response = (promptOnly || ltxTextToVideo)
+        ? await continueH3FromPrevious(project.id, scene.id)
+        : await prepareH3Continuity(project.id, scene.id)
       replaceProject(response.project)
       setSaveState('saved')
     } catch (error) {
@@ -472,6 +477,7 @@ export function Home() {
       setPreparingContinuity(false)
     }
   }
+
 
   const startSequence = async (kind: 'from_here' | 'all') => {
     if (!project || !scene || runtimeStatus !== 'connected' || activeRun) return
@@ -503,8 +509,8 @@ export function Home() {
     version => version.id === scene.selected_render_version_id,
   ) ?? null, [scene])
   const activeUpscaleVariant = activeVersion?.upscale_variants.find(item => item.id === selectedUpscaleVariantId) ?? null
-  const promptOnly = project?.workflow_profile_id === 'minimax_h3_no_reference'
-  const ltxTextToVideo = project?.workflow_profile_id === 'ltx_2_5_text_to_video'
+  const promptOnly = scene?.workflow_profile_id === 'minimax_h3_no_reference'
+  const ltxTextToVideo = scene?.workflow_profile_id === 'ltx_2_5_text_to_video'
   const miniMaxH3 = selectedWorkflowProfile?.displayName === 'MiniMax H3'
   const miniMaxH3ModeOptions = [
     { value: 'image_to_video' as H3WorkflowMode, label: 'Image to Video' },
@@ -528,7 +534,7 @@ export function Home() {
     && selectedContinuityArtifact.offset_from_end_frames === (scene?.continuity_strategy === 'offset_from_end' ? scene.continuity_offset_frames : 0)
     ? selectedContinuityArtifact : null
   const modeHasInput = (promptOnly || ltxTextToVideo) ? scene?.mode === 'new_shot' : scene?.mode === 'continue_previous' ? Boolean(sourceVersion) : scene?.mode === 'new_shot' ? Boolean(scene.reference_image) : false
-  const profileCanRender = selectedWorkflowProfile?.status === 'verified' || selectedWorkflowProfile?.status === 'runtime_verified'
+  const profileCanRender = selectedWorkflowProfile ? ['verified', 'runtime_verified'].includes(profileRuntimeStatus(selectedWorkflowProfile)) : false
   const canRender = Boolean(project && profileCanRender && scene?.prompt.trim() && modeHasInput && lifecycle?.state === 'ready' && !rendering && !preparingContinuity)
   const phaseActive = scene ? ACTIVE_STATUSES.includes(scene.status) : false
   const activeVersionIndex = scene?.render_versions.findIndex(version => version.id === scene.selected_render_version_id) ?? -1
@@ -563,7 +569,8 @@ export function Home() {
     updateSceneLocally({ duration_seconds: duration, frame_count: frameCountForWorkflow(project?.workflow_profile_id, duration, scene.fps) })
   }
   const updateAspectRatio = (aspectRatio: H3AspectRatio) => {
-    const [width, height] = H3_RESOLUTION_PRESETS[aspectRatio][scene?.resolution_megapixels ?? 0.4]
+    const ltxFinal: Partial<Record<H3AspectRatio, readonly [number, number]>> = { '16:9 (Widescreen)': [1280, 704], '9:16 (Portrait Widescreen)': [704, 1280], '1:1 (Square)': [960, 960] }
+    const [width, height] = (ltxProfile ? ltxFinal[aspectRatio] : undefined) ?? H3_RESOLUTION_PRESETS[aspectRatio][scene?.resolution_megapixels ?? 0.4]
     updateSceneLocally({ aspect_ratio: aspectRatio, width, height })
   }
   const updateResolution = (resolutionMegapixels: H3ResolutionMegapixels) => {
@@ -614,7 +621,7 @@ export function Home() {
         </div></div>
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-5">
           <div className="mb-3 flex items-center justify-between px-2"><span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Recent Projects</span><button onClick={() => setShowNewProject(true)} aria-label="New Project"><Plus className="h-4 w-4" /></button></div>
-          <div className="space-y-1">{projects.map(item => <button key={item.id} onClick={() => void getH3Project(item.id).then(replaceProject)} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm ${project?.id === item.id ? 'bg-amber-300/10 text-amber-200' : 'text-zinc-400 hover:bg-white/5'}`}><Folder className="h-4 w-4" /><span className="truncate">{item.name}</span></button>)}</div>
+          <div className="space-y-1">{projects.map(item => <div key={item.id} className={`group flex items-center gap-1 rounded-lg ${project?.id === item.id ? 'bg-amber-300/10 text-amber-200' : 'text-zinc-400 hover:bg-white/5'}`}><button onClick={() => void getH3Project(item.id).then(replaceProject)} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left text-sm"><Folder className="h-4 w-4" /><span className="truncate">{item.name}</span></button><details className="relative mr-2"><summary aria-label={`Project actions for ${item.name}`} className="cursor-pointer list-none rounded px-1.5 py-1 text-zinc-500 hover:bg-white/10 hover:text-white">⋯</summary><div className="absolute right-0 z-30 mt-1 w-40 rounded-lg border border-white/10 bg-[#11151c] p-1 text-xs shadow-xl"><button onClick={() => { const name = window.prompt('Rename project', item.name); if (name?.trim()) void renameH3Project(item.id, name).then(replaceProject).catch(error => setWorkspaceError(error instanceof Error ? error.message : 'Project rename failed.')) }} className="block w-full rounded px-2 py-2 text-left hover:bg-white/10">Rename</button><button onClick={() => void window.electronAPI.showItemInFolder({ filePath: item.project_root })} className="block w-full rounded px-2 py-2 text-left hover:bg-white/10">Open Project Folder</button><button onClick={() => { if (!window.confirm(`Move “${item.name}” to H3 Director Trash?`)) return; void deleteH3Project(item.id).then(async () => { const remaining = projects.filter(candidate => candidate.id !== item.id); setProjects(remaining); if (project?.id === item.id) { if (remaining[0]) replaceProject(await getH3Project(remaining[0].id)); else setProject(null) } }).catch(error => setWorkspaceError(error instanceof Error ? error.message : 'Project deletion failed.')) }} className="block w-full rounded px-2 py-2 text-left text-red-300 hover:bg-red-400/10">Delete Project</button></div></details></div>)}</div>
           {!projects.length && <p className="px-3 py-4 text-xs leading-5 text-zinc-600">Create a disk-backed local project to begin.</p>}
           <div className="mt-8 px-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Assets</div>
           <button onClick={() => void chooseReferenceImage()} disabled={!scene} className="mt-3 flex w-full items-center gap-3 rounded-lg border border-dashed border-white/10 px-3 py-3 text-left text-xs text-zinc-500 disabled:opacity-30"><ImagePlus className="h-4 w-4" />{scene?.reference_image ? 'Replace reference' : 'Add reference image'}</button>
@@ -642,7 +649,7 @@ export function Home() {
         <div className="mt-5"><div className="flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500"><span>Scene prompt</span><button type="button" onClick={() => void improvePrompt()} disabled={!scene?.prompt.trim()} className="rounded border border-amber-300/25 px-2 py-1 text-[10px] text-amber-200 disabled:opacity-30">Improve Prompt</button></div><textarea value={scene?.prompt ?? ''} disabled={!scene} onChange={event => { setPromptSuggestion(null); updateSceneLocally({ prompt: event.target.value }) }} className="mt-2 h-32 w-full resize-none rounded-xl border border-white/10 bg-black/30 p-3 text-sm normal-case leading-6 tracking-normal outline-none focus:border-amber-300/40" placeholder="Describe the shot, movement, lighting and mood…" />{promptAssistantMessage && <p className="mt-2 text-[10px] text-zinc-500">{promptAssistantMessage}</p>}{promptSuggestion && <div className="mt-2 rounded-lg border border-amber-300/20 bg-amber-300/[0.04] p-3 text-xs"><div className="text-zinc-500">Original</div><p className="mt-1 whitespace-pre-wrap text-zinc-300">{scene?.prompt}</p><div className="mt-3 text-zinc-500">Suggested</div><textarea value={promptSuggestion} onChange={event => setPromptSuggestion(event.target.value)} className="mt-1 h-28 w-full resize-y rounded border border-white/10 bg-black/30 p-2 text-xs text-zinc-200 outline-none" /><div className="mt-2 flex gap-2"><button type="button" onClick={() => { updateSceneLocally({ prompt: promptSuggestion }); setPromptSuggestion(null) }} className="rounded border border-emerald-400/25 px-2 py-1 text-[10px] text-emerald-200">Accept</button><button type="button" onClick={() => setPromptSuggestion(null)} className="rounded border border-white/10 px-2 py-1 text-[10px] text-zinc-300">Cancel / Edit</button></div></div>}</div>
         {scene && <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Audio guidance</div><label className="mt-2 block text-[10px] uppercase tracking-wider text-zinc-600">Audio mode<select value={scene.audio_mode} onChange={event => updateSceneLocally({ audio_mode: event.target.value as H3Scene['audio_mode'] })} className="mt-1 w-full rounded-lg border border-white/10 bg-[#11151c] px-2 py-2 text-xs normal-case tracking-normal text-zinc-200"><option value="natural_ambience">Natural ambience</option><option value="dialogue">Dialogue</option><option value="silent">Silent</option></select></label><div className="mt-3 flex gap-4 text-xs text-zinc-300"><label className="flex items-center gap-2"><input type="checkbox" checked={scene.no_speech} disabled={scene.audio_mode === 'silent'} onChange={event => updateSceneLocally({ no_speech: event.target.checked })} />No speech</label><label className="flex items-center gap-2"><input type="checkbox" checked={scene.no_music} disabled={scene.audio_mode === 'silent'} onChange={event => updateSceneLocally({ no_music: event.target.checked })} />No music</label></div><label className="mt-3 block text-[10px] uppercase tracking-wider text-zinc-600">Custom audio instruction<input value={scene.custom_audio_instruction} disabled={scene.audio_mode === 'silent'} onChange={event => updateSceneLocally({ custom_audio_instruction: event.target.value })} placeholder="e.g. footsteps in snow and light winter wind" className="mt-1 w-full rounded-lg border border-white/10 bg-black/30 px-2 py-2 text-xs normal-case tracking-normal text-zinc-200" /></label><div className="mt-3 text-[10px] text-zinc-500">Audio: {h3AudioSummary(scene)}</div><details className="mt-2 text-[10px] text-zinc-500"><summary className="cursor-pointer">View final prompt</summary><p className="mt-2 whitespace-pre-wrap leading-5 text-zinc-300">{finalPrompt || 'Add a scene prompt to preview the final prompt.'}</p></details></div>}
         <label style={{ display: selectedWorkflowProfile?.id === 'ltx_2_5_image_to_video' || promptOnly || ltxTextToVideo ? 'none' : undefined }} className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene Mode<select value={scene?.mode ?? 'new_shot'} disabled={!scene} onChange={event => updateSceneLocally({ mode: event.target.value as H3Scene['mode'] })} className="mt-2 w-full rounded-xl border border-white/10 bg-[#11151c] px-3 py-3 text-sm normal-case tracking-normal text-zinc-300"><option value="new_shot">New Shot</option><option value="continue_previous">Continue Previous</option><option value="same_character_new_shot">Same Character, New Shot — unavailable</option></select></label>
-        {(promptOnly || ltxTextToVideo) && <p className="mt-5 rounded-lg border border-amber-300/20 bg-amber-300/[0.035] p-3 text-xs text-amber-100">{promptOnly ? 'Prompt Only generates an independent new shot. Image-based Continue Previous is available only in Image to Video.' : 'Text to Video generates an independent prompt-only shot. Image references and image continuity are not part of this workflow.'}</p>}
+        {(promptOnly || ltxTextToVideo) && <div className="mt-5 rounded-lg border border-amber-300/20 bg-amber-300/[0.035] p-3 text-xs text-amber-100"><p>Continue from Previous Clip creates visual-frame continuity: H3 extracts the selected completed version’s last or offset frame and changes only this next scene to Image to Video.</p><button type="button" disabled={!sourceVersion || preparingContinuity} onClick={() => void prepareContinuity()} className="mt-3 rounded border border-amber-300/30 px-2 py-1 text-[10px] text-amber-100 disabled:opacity-30">{preparingContinuity ? 'Preparing continuity…' : 'Continue from Previous Clip'}</button></div>}
         <label style={{ display: selectedWorkflowProfile?.id === 'ltx_2_5_image_to_video' || promptOnly || ltxTextToVideo ? 'none' : undefined }} className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Reference fit<select value={scene?.reference_fit ?? 'fill_crop'} disabled={!scene} onChange={event => updateSceneLocally({ reference_fit: event.target.value as H3Scene['reference_fit'] })} className="mt-2 w-full rounded-xl border border-white/10 bg-[#11151c] px-3 py-3 text-sm normal-case tracking-normal text-zinc-300"><option value="fill_crop">Fill / Crop</option><option value="fit">Fit</option><option value="stretch">Stretch (may distort)</option></select><span className="mt-1 block normal-case tracking-normal text-[10px] text-zinc-600">The original image is never changed; H3 stages an exact-size render copy.</span></label>
         {project && <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3"><label className="block text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Sequence mode<select value={project.sequence_mode ?? 'independent_shots'} onChange={event => void updateH3Project(project.id, { sequence_mode: event.target.value as H3SequenceMode }).then(replaceProject).catch(error => setWorkspaceError(error instanceof Error ? error.message : 'Sequence mode could not be saved.'))} className="mt-2 w-full rounded-lg border border-white/10 bg-[#11151c] px-2 py-2 text-xs normal-case tracking-normal text-zinc-300"><option value="independent_shots">Independent shots</option><option value="continuous_sequence">Continuous sequence</option></select></label><button onClick={() => void applyContinuePrevious()} disabled={project.scenes.length < 2} className="mt-3 w-full rounded-lg border border-amber-300/20 px-2 py-2 text-xs text-amber-200 disabled:opacity-30">Apply Continue Previous to remaining scenes</button></div>}
         {runtimeConfig && <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.025] p-3"><div className="flex items-center justify-between"><span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Sage Attention</span><label className="flex items-center gap-2 text-xs text-zinc-300"><input type="checkbox" checked={Boolean(runtimeConfig.sageAttention)} onChange={event => setRuntimeConfig({ ...runtimeConfig, sageAttention: event.target.checked })} />{runtimeConfig.sageAttention ? 'On' : 'Off'}</label></div><p className="mt-2 text-[10px] text-zinc-600">{lifecycle?.state === 'ready' ? `Effective: ${runtimeConfig.sageAttention ? 'On' : 'Off'} after Restart required.` : 'Saved setting applies when the managed backend starts.'}</p></div>}

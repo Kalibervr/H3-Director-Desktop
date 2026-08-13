@@ -68,7 +68,7 @@ def test_project_survives_store_restart_and_autosaved_scene_settings(tmp_path: P
     assert reopened.scenes[0].seed == 123
     assert reopened.scenes[0].duration_seconds == 10.0
     assert reopened.scenes[0].frame_count == 255
-    assert reopened.schema_version == 12
+    assert reopened.schema_version == 13
     assert reopened.scenes[0].storage_name == "scene_001"
 
 
@@ -89,6 +89,16 @@ def test_aspect_ratio_and_resolution_preset_derive_dimensions_and_persist(tmp_pa
     assert reopened.scenes[0].reference_fit == "fit"
     assert reopened.scenes[0].resolution_megapixels == 0.8
     assert (reopened.scenes[0].width, reopened.scenes[0].height) == (1216, 672)
+
+
+def test_ltx_scene_update_uses_final_geometry_not_resolution_selector_dimensions(tmp_path: Path) -> None:
+    store = H3ProjectStore(tmp_path)
+    project = store.create_project("LTX", workflow_profile_id="ltx_2_5_text_to_video", workflow_mode="text_to_video")
+    scene = project.scenes[0]
+    updated = store.update_scene(project.id, scene.id, H3SceneUpdateRequest(aspect_ratio="9:16 (Portrait Widescreen)", resolution_megapixels=0.9))
+    assert (updated.scenes[0].width, updated.scenes[0].height) == (704, 1280)
+    reopened = H3ProjectStore(tmp_path).get_project(project.id)
+    assert (reopened.scenes[0].width, reopened.scenes[0].height) == (704, 1280)
 
 
 def test_five_scene_project_operations_preserve_independent_data_and_storage(tmp_path: Path) -> None:
@@ -141,12 +151,12 @@ def test_schema_one_project_migrates_atomically_without_data_loss(tmp_path: Path
 
     reopened = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
     migrated = json.loads(metadata.read_text(encoding="utf-8"))
-    assert reopened.schema_version == 12
+    assert reopened.schema_version == 13
     assert reopened.workflow_profile_id == "minimax_h3_image_to_video"
     assert reopened.workflow_mode == "image_to_video"
     assert reopened.scenes[0].id == project.scenes[0].id
     assert reopened.scenes[0].storage_name == "scene_001"
-    assert migrated["schema_version"] == 12
+    assert migrated["schema_version"] == 13
     assert list(Path(project.project_root).glob(".project.json.*.tmp")) == []
 
 
@@ -159,7 +169,7 @@ def test_v7_project_migrates_to_default_resolution_tier(tmp_path: Path) -> None:
     payload["scenes"][0].pop("resolution_megapixels")
     metadata.write_text(json.dumps(payload), encoding="utf-8")
     reopened = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
-    assert reopened.schema_version == 12
+    assert reopened.schema_version == 13
     assert reopened.scenes[0].resolution_megapixels == 0.4
     assert (reopened.scenes[0].width, reopened.scenes[0].height) == (640, 640)
 
@@ -174,7 +184,7 @@ def test_v8_project_migrates_audio_defaults_and_duplicate_preserves_audio(tmp_pa
         payload["scenes"][0].pop(key)
     metadata.write_text(json.dumps(payload), encoding="utf-8")
     migrated = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
-    assert migrated.schema_version == 12
+    assert migrated.schema_version == 13
     scene = migrated.scenes[0]
     assert (scene.audio_mode, scene.no_speech, scene.no_music, scene.custom_audio_instruction) == ("natural_ambience", False, False, "")
     saved = store.update_scene(project.id, scene.id, H3SceneUpdateRequest(audio_mode="dialogue", no_music=True, custom_audio_instruction="distant rain"))
@@ -192,7 +202,7 @@ def test_v11_project_migrates_ltx_prompt_enhance_and_ltx_creation_uses_captured_
     metadata.write_text(json.dumps(payload), encoding="utf-8")
 
     migrated = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
-    assert migrated.schema_version == 12
+    assert migrated.schema_version == 13
     assert migrated.scenes[0].ltx_prompt_enhance is False
 
     ltx = store.create_project("LTX I2V", workflow_profile_id="ltx_2_5_image_to_video")
@@ -227,3 +237,32 @@ def test_project_writes_leave_no_temporary_files_and_reject_outside_reopen(tmp_p
     assert payload["name"] == "Atomic Save"
     with pytest.raises(ProjectStoreError, match="app-owned"):
         store.reopen_project(tmp_path / "outside")
+
+
+def test_v12_migration_assigns_each_scene_the_project_generation_contract(tmp_path: Path) -> None:
+    store = H3ProjectStore(tmp_path / "Projects")
+    project = store.create_project("Prompt Only", workflow_profile_id="minimax_h3_no_reference", workflow_mode="text_to_video")
+    metadata = Path(project.project_root) / "project.json"
+    payload = json.loads(metadata.read_text(encoding="utf-8"))
+    payload["schema_version"] = 12
+    payload["scenes"][0].pop("workflow_profile_id")
+    payload["scenes"][0].pop("workflow_mode")
+    metadata.write_text(json.dumps(payload), encoding="utf-8")
+    migrated = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
+    assert migrated.schema_version == 13
+    assert (migrated.scenes[0].workflow_profile_id, migrated.scenes[0].workflow_mode) == (
+        "minimax_h3_no_reference", "text_to_video",
+    )
+
+
+def test_project_delete_moves_only_app_owned_project_to_recoverable_trash(tmp_path: Path) -> None:
+    store = H3ProjectStore(tmp_path / "Projects")
+    kept = store.create_project("Keep")
+    removed = store.create_project("Remove")
+    external = tmp_path / "external-reference.jpg"
+    external.write_bytes(b"external")
+    store.delete_project(removed.id)
+    assert [project.id for project in store.list_projects()] == [kept.id]
+    assert external.read_bytes() == b"external"
+    assert not Path(removed.project_root).exists()
+    assert any((store.projects_root / ".trash").iterdir())

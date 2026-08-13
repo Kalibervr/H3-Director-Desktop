@@ -7,7 +7,7 @@ export interface OllamaRuntimeConfig { autoStart: boolean; endpoint: string; mod
 export interface OllamaRuntimeStatus { state: OllamaRuntimeState; owned: boolean; pid: number | null; endpoint: string; executable: string | null; error: string | null; diagnostics: string[] }
 export interface OllamaRuntimeDependencies { getConfig: () => OllamaRuntimeConfig; saveConfig: (config: OllamaRuntimeConfig) => void; spawn?: typeof spawn; existsSync?: typeof fs.existsSync; execFileSync?: typeof execFileSync; fetch?: typeof fetch; env?: NodeJS.ProcessEnv }
 
-const defaults: OllamaRuntimeConfig = { autoStart: false, endpoint: 'http://127.0.0.1:11434' }
+const defaults: OllamaRuntimeConfig = { autoStart: true, endpoint: 'http://127.0.0.1:11434', model: 'qwen3:4b' }
 const loopbackEndpoint = 'http://127.0.0.1:11434'
 
 export class OllamaRuntimeCore {
