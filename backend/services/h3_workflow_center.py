@@ -87,3 +87,13 @@ class WorkflowCenter:
         status = "missing_nodes" if missing_nodes else "missing_models" if any(m["status"] == "missing" for m in models) else "contract_verified"
         entry["status"] = status; registry=self._read(); registry["workflows"]=[entry if x["id"]==workflow_id else x for x in registry["workflows"]]; _atomic_json(self.registry_file, registry)
         return {"status": status, "nodes": {"available": len(analysis["nodes"])-len(missing_nodes), "required": len(analysis["nodes"]), "missing": missing_nodes}, "models": models, "mappings": analysis["mappings"], "runtime_verified": False}
+    def save_mappings(self, workflow_id: str, mappings: list[dict[str, str]]) -> dict[str, Any]:
+        entry = next((x for x in self.list() if x["id"] == workflow_id), None)
+        if not entry or entry.get("built_in"): raise WorkflowCenterError("Only imported workflows may have mapping overrides.")
+        valid_inputs = {(n["id"], key) for n in entry.get("analysis", {}).get("nodes", []) for key in n.get("inputs", [])}
+        cleaned=[]
+        for item in mappings:
+            if item.get("control") not in CONTROL_NAMES or (item.get("node_id"), item.get("input")) not in valid_inputs: raise WorkflowCenterError("Mapping must select an analyzed workflow input.")
+            cleaned.append({"control": item["control"], "node_id": item["node_id"], "input": item["input"], "confidence": "manual", "source": "manual"})
+        entry["manual_mappings"] = cleaned; registry=self._read(); registry["workflows"]=[entry if x["id"]==workflow_id else x for x in registry["workflows"]]; _atomic_json(self.registry_file, registry)
+        return entry

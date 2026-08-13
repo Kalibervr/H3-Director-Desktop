@@ -46,6 +46,11 @@ def route_workflow_center_import(payload: dict[str, str] = Body(...), handler: A
 def route_workflow_center_validate(workflow_id: str, payload: dict[str, object] = Body(...), handler: AppHandler = Depends(get_state_service)) -> dict[str, object]:
     return handler.comfyui_minimax_h3.validate_workflow_center(workflow_id, str(payload.get("base_url", "")), [str(x) for x in payload.get("model_roots", []) if isinstance(x, str)])
 
+@router.put("/workflow-center/{workflow_id}/mappings")
+def route_workflow_center_mappings(workflow_id: str, payload: dict[str, object] = Body(...), handler: AppHandler = Depends(get_state_service)) -> dict[str, object]:
+    mappings = [item for item in payload.get("mappings", []) if isinstance(item, dict)]
+    return handler.comfyui_minimax_h3.save_workflow_center_mappings(workflow_id, mappings)  # type: ignore[arg-type]
+
 
 @router.get("/status", response_model=ComfyUIProbeResponse)
 def route_minimax_h3_status(

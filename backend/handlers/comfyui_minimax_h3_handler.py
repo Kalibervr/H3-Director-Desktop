@@ -696,6 +696,10 @@ class ComfyUIMiniMaxH3Handler:
         except (requests.RequestException, WorkflowCenterError, ValueError) as exc:
             raise HTTPError(422, f"Workflow validation could not complete: {exc}", code="H3_WORKFLOW_VALIDATION_ERROR") from exc
 
+    def save_workflow_center_mappings(self, workflow_id: str, mappings: list[dict[str, str]]) -> dict[str, object]:
+        try: return self._workflow_center().save_mappings(workflow_id, mappings)
+        except WorkflowCenterError as exc: raise HTTPError(422, str(exc), code="H3_WORKFLOW_MAPPING_ERROR") from exc
+
     def _resolve_render_input(self, project: H3Project, scene: H3Scene) -> Path:
         if scene.mode == "same_character_new_shot":
             raise ProjectStoreError(
