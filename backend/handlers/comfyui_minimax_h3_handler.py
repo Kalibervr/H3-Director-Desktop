@@ -230,6 +230,7 @@ class ComfyUIMiniMaxH3Handler:
             variant = H3UpscaleVariant(
                 id=result.output_file.parent.name, number=int(result.output_file.parent.name.removeprefix("v")),
                 created_at=str(metadata["created_at"]), root=str(result.output_file.parent),
+                processing_elapsed_seconds=(float(metadata["processing_elapsed_seconds"]) if isinstance(metadata.get("processing_elapsed_seconds"), (int, float)) else None),
                 video_file=str(result.output_file), metadata_file=str(result.metadata_file),
                 backend="nvidia_rtx_vsr", source_render_version_id=source.id,
                 source_width=source.width, source_height=source.height,

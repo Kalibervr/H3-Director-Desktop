@@ -195,6 +195,11 @@ class H3RenderVersion(BaseModel):
     id: str
     number: int = Field(ge=1)
     created_at: str
+    # Coordinator-owned execution interval: provider invocation through a
+    # verified/adopted usable MP4.  It intentionally excludes UI idle time.
+    render_started_at: str | None = None
+    render_completed_at: str | None = None
+    render_elapsed_seconds: float | None = Field(default=None, ge=0)
     root: str
     video_file: str
     metadata_file: str
@@ -225,6 +230,7 @@ class H3UpscaleVariant(BaseModel):
     id: str
     number: int = Field(ge=1)
     created_at: str
+    processing_elapsed_seconds: float | None = Field(default=None, ge=0)
     root: str
     video_file: str
     metadata_file: str
@@ -341,7 +347,7 @@ class H3RenderRun(BaseModel):
 
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[13]
+    schema_version: Literal[14]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str

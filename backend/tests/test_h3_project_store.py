@@ -68,7 +68,7 @@ def test_project_survives_store_restart_and_autosaved_scene_settings(tmp_path: P
     assert reopened.scenes[0].seed == 123
     assert reopened.scenes[0].duration_seconds == 10.0
     assert reopened.scenes[0].frame_count == 255
-    assert reopened.schema_version == 13
+    assert reopened.schema_version == 14
     assert reopened.scenes[0].storage_name == "scene_001"
 
 
@@ -151,12 +151,12 @@ def test_schema_one_project_migrates_atomically_without_data_loss(tmp_path: Path
 
     reopened = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
     migrated = json.loads(metadata.read_text(encoding="utf-8"))
-    assert reopened.schema_version == 13
+    assert reopened.schema_version == 14
     assert reopened.workflow_profile_id == "minimax_h3_image_to_video"
     assert reopened.workflow_mode == "image_to_video"
     assert reopened.scenes[0].id == project.scenes[0].id
     assert reopened.scenes[0].storage_name == "scene_001"
-    assert migrated["schema_version"] == 13
+    assert migrated["schema_version"] == 14
     assert list(Path(project.project_root).glob(".project.json.*.tmp")) == []
 
 
@@ -169,7 +169,7 @@ def test_v7_project_migrates_to_default_resolution_tier(tmp_path: Path) -> None:
     payload["scenes"][0].pop("resolution_megapixels")
     metadata.write_text(json.dumps(payload), encoding="utf-8")
     reopened = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
-    assert reopened.schema_version == 13
+    assert reopened.schema_version == 14
     assert reopened.scenes[0].resolution_megapixels == 0.4
     assert (reopened.scenes[0].width, reopened.scenes[0].height) == (640, 640)
 
@@ -184,7 +184,7 @@ def test_v8_project_migrates_audio_defaults_and_duplicate_preserves_audio(tmp_pa
         payload["scenes"][0].pop(key)
     metadata.write_text(json.dumps(payload), encoding="utf-8")
     migrated = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
-    assert migrated.schema_version == 13
+    assert migrated.schema_version == 14
     scene = migrated.scenes[0]
     assert (scene.audio_mode, scene.no_speech, scene.no_music, scene.custom_audio_instruction) == ("natural_ambience", False, False, "")
     saved = store.update_scene(project.id, scene.id, H3SceneUpdateRequest(audio_mode="dialogue", no_music=True, custom_audio_instruction="distant rain"))
@@ -202,7 +202,7 @@ def test_v11_project_migrates_ltx_prompt_enhance_and_ltx_creation_uses_captured_
     metadata.write_text(json.dumps(payload), encoding="utf-8")
 
     migrated = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
-    assert migrated.schema_version == 13
+    assert migrated.schema_version == 14
     assert migrated.scenes[0].ltx_prompt_enhance is False
 
     ltx = store.create_project("LTX I2V", workflow_profile_id="ltx_2_5_image_to_video")
@@ -249,7 +249,7 @@ def test_v12_migration_assigns_each_scene_the_project_generation_contract(tmp_pa
     payload["scenes"][0].pop("workflow_mode")
     metadata.write_text(json.dumps(payload), encoding="utf-8")
     migrated = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
-    assert migrated.schema_version == 13
+    assert migrated.schema_version == 14
     assert (migrated.scenes[0].workflow_profile_id, migrated.scenes[0].workflow_mode) == (
         "minimax_h3_no_reference", "text_to_video",
     )
@@ -266,3 +266,18 @@ def test_project_delete_moves_only_app_owned_project_to_recoverable_trash(tmp_pa
     assert external.read_bytes() == b"external"
     assert not Path(removed.project_root).exists()
     assert any((store.projects_root / ".trash").iterdir())
+
+
+def test_render_version_promotes_provider_timing_and_old_versions_remain_unrecorded(tmp_path: Path) -> None:
+    store = H3ProjectStore(tmp_path / "Projects")
+    project = store.create_project("Timing")
+    root = Path(project.project_root) / "scenes" / "scene_001" / "renders"
+    measured = _version(root, 1)
+    Path(measured.metadata_file).write_text(json.dumps({"render_elapsed_seconds": 42.5}), encoding="utf-8")
+    saved = store.add_render_version(project.id, project.scenes[0].id, measured)
+    assert saved.scenes[0].render_versions[0].render_elapsed_seconds == 42.5
+    legacy = _version(root, 2)
+    saved = store.add_render_version(project.id, project.scenes[0].id, legacy)
+    assert saved.scenes[0].render_versions[1].render_elapsed_seconds is None
+    reopened = H3ProjectStore(tmp_path / "Projects").get_project(project.id)
+    assert [version.render_elapsed_seconds for version in reopened.scenes[0].render_versions] == [42.5, None]

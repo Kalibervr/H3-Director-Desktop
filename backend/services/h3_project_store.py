@@ -7,7 +7,7 @@ import os
 import re
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from api_types import (
@@ -144,7 +144,7 @@ class H3ProjectStore:
         if sequence_mode == "continuous_sequence":
             scenes = [scene.model_copy(update={"mode": "new_shot" if scene.order == 1 else "continue_previous"}) for scene in scenes]
         project = H3Project(
-            schema_version=13,
+            schema_version=14,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
@@ -359,6 +359,7 @@ class H3ProjectStore:
         version: H3RenderVersion,
     ) -> H3Project:
         project = self.get_project(project_id)
+        version = self._hydrate_render_timing(version)
         scenes: list[H3Scene] = []
         found = False
         for scene in project.scenes:
@@ -457,6 +458,36 @@ class H3ProjectStore:
             raise ProjectStoreError("Scene order cannot change while a render queue is active.")
 
     @staticmethod
+    def _hydrate_render_timing(version: H3RenderVersion) -> H3RenderVersion:
+        """Promote a provider's local elapsed measurement into project metadata.
+
+        Older immutable versions remain intentionally unset; their file times are
+        not a substitute for a measured render interval.
+        """
+        if version.render_elapsed_seconds is not None:
+            return version
+        try:
+            payload = json.loads(Path(version.metadata_file).read_text(encoding="utf-8"))
+            elapsed = payload.get("render_elapsed_seconds", payload.get("elapsed_seconds"))
+            if isinstance(elapsed, (int, float)) and elapsed >= 0:
+                completed = version.render_completed_at or version.created_at
+                started = version.render_started_at
+                if started is None:
+                    try:
+                        completed_at = datetime.fromisoformat(completed.replace("Z", "+00:00"))
+                        started = (completed_at - timedelta(seconds=float(elapsed))).isoformat()
+                    except (TypeError, ValueError):
+                        started = None
+                return version.model_copy(update={
+                    "render_elapsed_seconds": float(elapsed),
+                    "render_started_at": started,
+                    "render_completed_at": completed,
+                })
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+        return version
+
+    @staticmethod
     def _new_scene(
         order: int, storage_name: str, source: H3Scene | None = None,
         workflow_profile_id: str = "minimax_h3_image_to_video", workflow_mode: str = "image_to_video",
@@ -537,12 +568,12 @@ class H3ProjectStore:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             original_schema = payload.get("schema_version")
-            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}
+            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13}
             if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
             if migrated:
-                payload["schema_version"] = 13
+                payload["schema_version"] = 14
                 payload.setdefault("sequence_mode", "independent_shots")
                 payload.setdefault("workflow_profile_id", "minimax_h3_image_to_video")
                 payload.setdefault("workflow_mode", "image_to_video")
@@ -575,6 +606,11 @@ class H3ProjectStore:
                         version.setdefault("no_music", scene.get("no_music", False))
                         version.setdefault("custom_audio_instruction", scene.get("custom_audio_instruction", ""))
                         version.setdefault("upscale_variants", [])
+                        version.setdefault("render_started_at", None)
+                        version.setdefault("render_completed_at", None)
+                        version.setdefault("render_elapsed_seconds", None)
+                        for variant in version["upscale_variants"]:
+                            variant.setdefault("processing_elapsed_seconds", None)
                 for run in payload.get("render_runs", []):
                     for item in run.get("items", []):
                         item.setdefault("current_phase", None)
@@ -608,6 +644,14 @@ class H3ProjectStore:
             }))
         if interrupted:
             project = project.model_copy(update={"render_runs": recovered_runs})
-        if migrated or interrupted:
+        timing_hydrated = False
+        hydrated_scenes: list[H3Scene] = []
+        for scene in project.scenes:
+            versions = [self._hydrate_render_timing(version) for version in scene.render_versions]
+            timing_hydrated = timing_hydrated or any(before != after for before, after in zip(scene.render_versions, versions, strict=True))
+            hydrated_scenes.append(scene.model_copy(update={"render_versions": versions}))
+        if timing_hydrated:
+            project = project.model_copy(update={"scenes": hydrated_scenes})
+        if migrated or interrupted or timing_hydrated:
             _atomic_json_write(path, project.model_dump(mode="json"))
         return project

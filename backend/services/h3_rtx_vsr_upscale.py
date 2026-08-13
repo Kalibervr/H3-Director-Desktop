@@ -109,6 +109,7 @@ class ComfyUIRtxVsrUpscaler:
         self._session = session or requests.Session()
 
     def upscale_2x(self, *, base_url: str, source_video: Path, destination_root: Path) -> RtxVsrResult:
+        started = time.monotonic()
         try:
             base_url = require_loopback_http_url(base_url)
         except ValueError as exc:
@@ -175,6 +176,7 @@ class ComfyUIRtxVsrUpscaler:
                     "output_resolution": {"width": video.width, "height": video.height}, "scale": 2,
                     "fps": video.fps, "duration_seconds": video.duration_seconds,
                     "audio_preserved": video.audio_present, "prompt_id": prompt_id,
+                    "processing_elapsed_seconds": time.monotonic() - started,
                     "output_sha256": output_sha256, "ffprobe": asdict(video)}
                 temporary = candidate / f".metadata.{uuid.uuid4().hex}.tmp"
                 with temporary.open("x", encoding="utf-8", newline="\n") as stream:

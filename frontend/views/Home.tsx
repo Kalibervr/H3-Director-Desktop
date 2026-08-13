@@ -4,6 +4,7 @@ import {
   ChevronDown, ChevronLeft, ChevronRight, Loader2, Plus, RotateCcw, Sparkles, Square,
 } from 'lucide-react'
 import { SceneStoryboard } from '../components/SceneStoryboard'
+import { DirectorControlsSidebar } from '../components/DirectorControlsSidebar'
 import { useProjects } from '../contexts/ProjectContext'
 import { useView } from '../contexts/ViewContext'
 import { pathToFileUrl } from '../lib/file-url'
@@ -159,6 +160,14 @@ export function Home() {
   const viewedRun = project?.render_runs.find(run => run.id === selectedRunId) ?? latestRun
   const existingEditorProject = project ? readProject(h3EditorProjectId(project.id)) : null
   const editorUpdates = project && existingEditorProject ? getH3EditorUpdates(project, existingEditorProject) : []
+  const ltxRequiredModelCount = ltx25Models?.assets.filter(asset => asset.required).length ?? 6
+  const ltxFoundModelCount = ltx25Models?.assets.filter(asset => asset.required && asset.state === 'found').length ?? 0
+  const ltxReadiness = ltx25Models ? { found: ltxFoundModelCount, required: ltxRequiredModelCount, ready: ltxFoundModelCount === ltxRequiredModelCount && lifecycle?.state === 'ready' } : null
+  const compactOllamaStatus = ollamaLifecycle?.state === 'ready'
+    ? `Ready · ${runtimeConfig?.ollamaModel ?? 'Local Ollama'}`
+    : ollamaLifecycle?.state === 'starting' ? 'Starting…'
+      : ollamaLifecycle?.state === 'not_installed' ? 'Not installed'
+        : ollamaLifecycle?.state === 'failed' ? 'Unavailable' : 'Not running'
 
   useEffect(() => {
     if (lifecycle?.state !== 'ready') { setUpscaleAvailability(RTX_VSR_SETUP_REQUIRED); return }
@@ -171,6 +180,10 @@ export function Home() {
     setLtx25Models(result)
     return result
   }
+
+  useEffect(() => {
+    if (runtimeConfig?.extraModelPathsConfig) void refreshLtx25Models().catch(() => setLtx25Models(null))
+  }, [runtimeConfig?.extraModelPathsConfig])
 
   const importLtx25Models = async () => {
     try {
@@ -353,6 +366,16 @@ export function Home() {
         setSaveState('saved')
       }).catch(() => setSaveState('error'))
     }, 500)
+  }
+
+  const changeSceneProfile = (workflowProfileId: H3WorkflowProfileId, workflowMode: H3WorkflowMode) => {
+    if (!project || !scene) return
+    const next = workflowProfileId === 'minimax_h3_no_reference'
+      ? { workflow_profile_id: workflowProfileId, workflow_mode: workflowMode, mode: 'new_shot' as const, aspect_ratio: '1:1 (Square)' as const, resolution_megapixels: 0.4 as const, width: 640, height: 640, fps: 24, duration_seconds: 5, frame_count: 124 }
+      : workflowProfileId.startsWith('ltx_2_5_')
+        ? { workflow_profile_id: workflowProfileId, workflow_mode: workflowMode, mode: 'new_shot' as const, aspect_ratio: '16:9 (Widescreen)' as const, resolution_megapixels: 0.9 as const, width: 1280, height: 704, fps: 24, duration_seconds: 5, frame_count: 121, ltx_prompt_enhance: true }
+        : { workflow_profile_id: workflowProfileId, workflow_mode: workflowMode }
+    void updateH3Scene(project.id, scene.id, next).then(replaceProject).catch(error => setWorkspaceError(error instanceof Error ? error.message : 'Generation profile could not be saved.'))
   }
 
   const flushPendingSave = async () => {
@@ -612,6 +635,10 @@ export function Home() {
     } finally { setPromptAssistantBusy(false) }
   }
 
+  // Legacy callbacks remain available while the old JSX below is retained as a
+  // commented migration reference. The extracted sidebar is the only rendered surface.
+  void [Clapperboard, ChevronLeft, ChevronRight, Loader2, RotateCcw, Sparkles, Square, h3AudioSummary, H3_WORKFLOW_PROFILES, LTX_2_5_OFFICIAL_MODEL_PAGE, updateH3Project, installH3WorkflowProfile, H3ThemedSelect, runtimeError, ollamaLifecycle, sequenceStarting, workspaceError, fileActionMessage, ltx25Models, ltx25Importing, upscaling, promptAssistantMessage, promptSuggestion, clock, profileAspectRatios, profileResolutionMegapixels, viewedRun, importLtx25Models, upscaleActiveVersion, saveRuntimeSettings, startManagedRuntime, applyContinuePrevious, startSequence, stopSequence, miniMaxH3, miniMaxH3ModeOptions, phaseActive, activeVersionIndex, finalPrompt, selectVersionAt, updateDuration, updateAspectRatio, updateResolution]
+
   return <div className="h3-director-ui h-screen overflow-hidden bg-[#07090d] text-zinc-100">
     <div className="grid h-full grid-cols-[250px_minmax(0,1fr)_360px] grid-rows-[minmax(0,1fr)_150px]">
       <aside className="row-span-2 flex min-h-0 flex-col border-r border-white/10 bg-[#0a0d12]">
@@ -642,6 +669,36 @@ export function Home() {
         </section>
       </main>
 
+      <DirectorControlsSidebar
+        project={project}
+        scene={scene}
+        profile={selectedWorkflowProfile}
+        mode={selectedWorkflowMode}
+        activeVersion={activeVersion}
+        sourceVersion={sourceVersion}
+        continuityArtifact={continuityArtifact}
+        lifecycleReady={canRender}
+        sageAttention={Boolean(runtimeConfig?.sageAttention)}
+        activeUpscaleVariant={activeUpscaleVariant}
+        upscaleAvailable={upscaleAvailability.available}
+        upscaling={upscaling}
+        onScenePatch={updateSceneLocally}
+        onProfileChange={changeSceneProfile}
+        onChooseReference={() => void chooseReferenceImage()}
+        onImprovePrompt={() => void improvePrompt()}
+        onPrepareContinuity={() => void prepareContinuity()}
+        onRender={() => void renderScene()}
+        onSelectVersion={id => { setSelectedUpscaleVariantId(null); if (project && scene) void updateH3Scene(project.id, scene.id, { selected_render_version_id: id }).then(replaceProject) }}
+        onSaveCopy={() => void saveRenderCopy()}
+        onShowFolder={() => void revealRender()}
+        onOpenEditor={() => openActiveMediaInEditor()}
+        onOpenAdvanced={() => setShowWorkflowCenter(true)}
+        onSelectUpscale={setSelectedUpscaleVariantId}
+        onUpscale={() => void upscaleActiveVersion()}
+        ollamaStatus={compactOllamaStatus}
+        ltxReadiness={ltxReadiness}
+      />
+      {/* Legacy sidebar retained in source history while the extracted component above is the sole rendered control surface.
       <aside className="row-span-2 min-h-0 overflow-y-auto border-l border-white/10 bg-[#0b0e13] p-5">
         <div className="flex items-center justify-between"><div className="flex items-center gap-2 text-sm font-semibold"><Sparkles className="h-4 w-4 text-amber-300" /> Director controls</div>{scene && <span className="text-[10px] uppercase tracking-wider text-zinc-600">{STATUS_LABELS[scene.status]}</span>}</div>
         {project?.workflow_profile_id.startsWith('ltx_2_5_') && <div className="mt-4 rounded-xl border border-indigo-300/20 bg-indigo-300/[0.035] p-3"><div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-indigo-200">LTX 2.5 mode</div><H3ThemedSelect value={project.workflow_mode} ariaLabel="LTX 2.5 mode" onChange={mode => { const targetProfileId: H3WorkflowProfileId = mode === 'text_to_video' ? 'ltx_2_5_text_to_video' : 'ltx_2_5_image_to_video'; void updateH3Project(project.id, { workflow_profile_id: targetProfileId, workflow_mode: mode }).then(next => scene ? updateH3Scene(next.id, scene.id, { mode: 'new_shot', aspect_ratio: '16:9 (Widescreen)', resolution_megapixels: 0.9, width: 1280, height: 704, fps: 24, duration_seconds: 5, frame_count: 121, ltx_prompt_enhance: true }).then(replaceProject) : replaceProject(next)).catch(error => setWorkspaceError(error instanceof Error ? error.message : 'LTX 2.5 mode could not be saved.')) }} options={[{ value: 'image_to_video' as H3WorkflowMode, label: 'Image to Video' }, { value: 'text_to_video' as H3WorkflowMode, label: 'Text to Video' }]} /><p className="mt-2 text-[10px] leading-4 text-zinc-400">{ltxTextToVideo ? 'Text to Video is runtime-verified only for 16:9 / 0.9 MP / 1280×704 / 24 FPS / 5 seconds / 121 frames. Other settings and image continuity remain unavailable.' : 'Image to Video requires a reference image.'}</p></div>}
@@ -677,7 +734,7 @@ export function Home() {
         {activeRun && activeRun.kind !== 'scene' && <button onClick={() => void stopSequence(activeRun)} disabled={activeRun.stop_after_current_requested} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-red-400/20 px-3 py-2.5 text-xs text-red-300 disabled:opacity-40"><Square className="h-3 w-3" />{activeRun.stop_after_current_requested ? 'Stopping after current scene…' : 'Stop after current scene'}</button>}
         {viewedRun && <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3"><div className="flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.16em] text-zinc-500"><span>{viewedRun.kind === 'scene' ? 'Render Scene' : viewedRun.kind === 'from_here' ? 'Render From Here' : 'Render All'}</span><span>{viewedRun.status}</span></div><div className="mt-1 font-mono text-[9px] text-zinc-700">Run {viewedRun.id}</div><div className="mt-2 text-[10px] text-zinc-500">Current scene: {project?.scenes.find(candidate => candidate.id === viewedRun.current_scene_id)?.name ?? 'None'}</div><div className="mt-2 grid grid-cols-2 gap-1 text-[10px] text-zinc-500"><span>Started {new Date(viewedRun.started_at).toLocaleString()}</span><span>Elapsed {Math.max(0, Math.floor(((viewedRun.completed_at ? new Date(viewedRun.completed_at).getTime() : clock) - new Date(viewedRun.started_at).getTime()) / 1000))}s</span><span>Complete {viewedRun.items.filter(item => item.state === 'complete').length}</span><span>Waiting {viewedRun.items.filter(item => item.state === 'waiting').length}</span><span>Failed {viewedRun.items.filter(item => item.state === 'failed').length}</span><span>Cancelled {viewedRun.items.filter(item => item.state === 'cancelled').length}</span></div><div className="mt-2 space-y-1.5">{viewedRun.items.map(item => { const queuedScene = project?.scenes.find(candidate => candidate.id === item.scene_id); const percent = item.progress_value !== null && item.progress_max ? Math.round(item.progress_value / item.progress_max * 100) : null; return <div key={item.scene_id} className={`rounded-lg px-2 py-1.5 text-[11px] ${viewedRun.current_scene_id === item.scene_id ? 'bg-amber-300/10 text-amber-200' : 'bg-white/[0.025] text-zinc-500'}`}><div className="flex justify-between"><span className="truncate">{queuedScene?.name ?? `Scene ${item.scene_order}`}</span><span className="ml-2 uppercase">{item.current_phase ?? item.state}{percent !== null ? ` · ${percent}%` : ''}</span></div>{item.render_version_id && <div className="mt-1 text-[9px] text-zinc-700">{item.render_version_id} · {item.prompt_id}{item.continuity_artifact_id ? ` · ${item.continuity_artifact_id}` : ''}</div>}{item.diagnostics && <details className="mt-1 text-[9px] text-red-300/60"><summary>Diagnostics</summary>{item.diagnostics}</details>}</div> })}</div>{viewedRun.failure_or_cancel_reason && <p className="mt-2 text-[10px] text-red-300">{viewedRun.failure_or_cancel_reason}</p>} {!!project?.render_runs.length && <label className="mt-3 block text-[9px] uppercase tracking-wider text-zinc-600">Run history<select value={viewedRun.id} onChange={event => setSelectedRunId(event.target.value)} className="mt-1 w-full rounded-lg border border-white/10 bg-[#11151c] px-2 py-2 text-[10px] normal-case text-zinc-400">{[...project.render_runs].reverse().map(run => <option key={run.id} value={run.id}>{run.kind} · {new Date(run.started_at).toLocaleString()} · {run.status}</option>)}</select></label>}</div>}
         <p className="mt-3 text-center text-[10px] text-zinc-700">Real sampler progress only · phase otherwise</p>
-      </aside>
+      </aside> */}
 
       <SceneStoryboard project={project} statusLabels={STATUS_LABELS} onSelect={target => project && target.id !== project.selected_scene_id && void runSceneOperation(() => selectH3Scene(project.id, target.id))} onAdd={() => project && void runSceneOperation(() => addH3Scene(project.id))} onDuplicate={target => project && void runSceneOperation(() => duplicateH3Scene(project.id, target.id))} onDelete={target => project && void runSceneOperation(() => deleteH3Scene(project.id, target.id))} onMove={moveScene} />
     </div>

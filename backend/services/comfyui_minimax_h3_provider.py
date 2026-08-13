@@ -440,6 +440,7 @@ def create_immutable_render_version(
     prompt_id: str,
     request: SingleSceneRequest,
     video: VideoProbe,
+    elapsed_seconds: float,
 ) -> tuple[Path, Path, Path]:
     render_root.mkdir(parents=True, exist_ok=True)
     version_dir: Path | None = None
@@ -482,6 +483,7 @@ def create_immutable_render_version(
             "height": request.height,
             "duration_seconds": request.duration_seconds,
             "fps": request.fps,
+            "render_elapsed_seconds": elapsed_seconds,
             "input_image_sha256": hashlib.sha256(request.input_image.read_bytes()).hexdigest(),
             "workflow_sha256": VERIFIED_WORKFLOW_SHA256,
             "output_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
@@ -611,6 +613,7 @@ class ComfyUIMiniMaxH3Provider:
         def cancelled() -> bool:
             return cancel_requested is not None and cancel_requested()
 
+        started = time.monotonic()
         report("Preparing")
         try:
             normalized_url = require_loopback_http_url(base_url)
@@ -708,7 +711,7 @@ class ComfyUIMiniMaxH3Provider:
         report("Verifying", prompt_id)
         video = probe_video(self._ffprobe_path, source_output)
         version_dir, output, metadata = create_immutable_render_version(
-            self._render_root, source_output, prompt_id, request, video
+            self._render_root, source_output, prompt_id, request, video, time.monotonic() - started
         )
         return RenderResult(prompt_id, source_output, version_dir, output, metadata, video)
 

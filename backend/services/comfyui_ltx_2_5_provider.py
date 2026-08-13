@@ -151,6 +151,7 @@ class ComfyUILtx25I2VProvider:
         self._session = requests.Session()
 
     def render(self, *, base_url: str, request: LtxI2VRequest, timeout_seconds: float = 1800.0) -> RenderResult:
+        started = time.monotonic()
         try:
             normalized = require_loopback_http_url(base_url)
             if urlsplit(normalized).scheme != "http":
@@ -204,7 +205,7 @@ class ComfyUILtx25I2VProvider:
             raise ProviderError("The LTX output does not match the verified video and audio contract.")
         if video.fps not in {"24/1", "24"} or abs(video.duration_seconds - 5.0) > 0.25:
             raise ProviderError("The LTX output does not match the verified timing contract.")
-        render_dir, output, metadata = self._adopt(source, prompt_id, request, video)
+        render_dir, output, metadata = self._adopt(source, prompt_id, request, video, time.monotonic() - started)
         return RenderResult(prompt_id, source, render_dir, output, metadata, video)
 
     def _validate_runtime(self, base_url: str, workflow: JsonObject) -> None:
@@ -234,7 +235,7 @@ class ComfyUILtx25I2VProvider:
             raise ProviderError("Local ComfyUI returned an unsafe LTX staged image name.")
         return staged
 
-    def _adopt(self, source: Path, prompt_id: str, request: LtxI2VRequest, video: VideoProbe) -> tuple[Path, Path, Path]:
+    def _adopt(self, source: Path, prompt_id: str, request: LtxI2VRequest, video: VideoProbe, elapsed_seconds: float) -> tuple[Path, Path, Path]:
         self._render_root.mkdir(parents=True, exist_ok=True)
         for number in range(1, 10000):
             directory = self._render_root / f"v{number:03d}"
@@ -256,6 +257,7 @@ class ComfyUILtx25I2VProvider:
                 "aspect_ratio": request.aspect_ratio, "resolution_megapixels": request.resolution_megapixels,
                 "width": request.width, "height": request.height, "fps": request.fps, "duration_seconds": request.duration_seconds,
                 "frame_count": request.frame_count, "seed": request.seed, "audio_capability": "synchronized_audio_decode",
+                "render_elapsed_seconds": elapsed_seconds,
                 "input_image_sha256": hashlib.sha256(request.input_image.read_bytes()).hexdigest(),
                 "output_sha256": hashlib.sha256(output.read_bytes()).hexdigest(), "ffprobe": asdict(video),
             }

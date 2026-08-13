@@ -55,6 +55,9 @@ export interface H3RenderVersion {
   id: string
   number: number
   created_at: string
+  render_started_at: string | null
+  render_completed_at: string | null
+  render_elapsed_seconds: number | null
   root: string
   video_file: string
   metadata_file: string
@@ -80,7 +83,7 @@ export interface H3RenderVersion {
 }
 
 export interface H3UpscaleVariant {
-  id: string; number: number; created_at: string; root: string; video_file: string; metadata_file: string
+  id: string; number: number; created_at: string; processing_elapsed_seconds: number | null; root: string; video_file: string; metadata_file: string
   backend: 'nvidia_rtx_vsr'; source_render_version_id: string; source_width: number; source_height: number
   width: number; height: number; scale: 2; fps: number; duration_seconds: number; audio_preserved: boolean
   prompt_id: string; source_video_sha256: string; output_sha256: string; ffprobe: H3VideoProbe
@@ -148,7 +151,7 @@ export interface H3Scene {
 }
 
 export interface H3Project {
-  schema_version: 13
+  schema_version: 14
   id: string
   name: string
   created_at: string
