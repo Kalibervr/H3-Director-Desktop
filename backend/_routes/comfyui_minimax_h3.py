@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 
 from api_types import (
     ComfyUIProbeResponse,
@@ -33,6 +33,18 @@ from app_handler import AppHandler
 from state import get_state_service
 
 router = APIRouter(prefix="/api/comfyui/minimax-h3", tags=["minimax-h3"])
+
+@router.get("/workflow-center/workflows")
+def route_workflow_center_list(handler: AppHandler = Depends(get_state_service)) -> list[dict[str, object]]:
+    return handler.comfyui_minimax_h3.list_workflow_center()
+
+@router.post("/workflow-center/import")
+def route_workflow_center_import(payload: dict[str, str] = Body(...), handler: AppHandler = Depends(get_state_service)) -> dict[str, object]:
+    return handler.comfyui_minimax_h3.import_workflow_center(payload.get("source_path", ""))
+
+@router.post("/workflow-center/{workflow_id}/validate")
+def route_workflow_center_validate(workflow_id: str, payload: dict[str, object] = Body(...), handler: AppHandler = Depends(get_state_service)) -> dict[str, object]:
+    return handler.comfyui_minimax_h3.validate_workflow_center(workflow_id, str(payload.get("base_url", "")), [str(x) for x in payload.get("model_roots", []) if isinstance(x, str)])
 
 
 @router.get("/status", response_model=ComfyUIProbeResponse)

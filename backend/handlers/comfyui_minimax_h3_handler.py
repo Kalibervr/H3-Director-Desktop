@@ -60,6 +60,7 @@ from services.h3_rtx_vsr_upscale import ComfyUIRtxVsrUpscaler
 from services.h3_ollama_prompt_assistant import OllamaPromptAssistant, OllamaPromptAssistantError
 from services.h3_workflow_profiles import WorkflowProfileError, WorkflowProfileRegistry, validate_profile_package
 from services.h3_ltx_2_5_model_import import Ltx25ModelImportError, import_ltx25_assets, inspect_ltx25_assets, resolve_shared_model_root
+from services.h3_workflow_center import WorkflowCenter, WorkflowCenterError
 
 
 @dataclass(frozen=True)
@@ -668,6 +669,32 @@ class ComfyUIMiniMaxH3Handler:
         cancel_requested: Callable[[], bool],
     ) -> H3Project:
         return self.render_project_scene(project_id, scene_id, request, status_callback, cancel_requested)
+
+    @staticmethod
+    def _workflow_center() -> WorkflowCenter:
+        local = os.environ.get("LOCALAPPDATA", "").strip()
+        if not local:
+            raise HTTPError(503, "The local H3 application-data folder is unavailable.")
+        return WorkflowCenter(Path(local) / "H3 Director Desktop" / "workflow-center")
+
+    def list_workflow_center(self) -> list[dict[str, object]]:
+        return self._workflow_center().list()
+
+    def import_workflow_center(self, source_path: str) -> dict[str, object]:
+        try:
+            return self._workflow_center().import_json(Path(source_path))
+        except WorkflowCenterError as exc:
+            raise HTTPError(422, str(exc), code="H3_WORKFLOW_IMPORT_ERROR") from exc
+
+    def validate_workflow_center(self, workflow_id: str, base_url: str, model_roots: list[str]) -> dict[str, object]:
+        try:
+            endpoint = require_loopback_http_url(base_url)
+            response = requests.get(f"{endpoint}/object_info", timeout=10)
+            response.raise_for_status()
+            roots = [Path(item).resolve() for item in model_roots if item and Path(item).is_dir()]
+            return self._workflow_center().validate(workflow_id, response.json(), roots)
+        except (requests.RequestException, WorkflowCenterError, ValueError) as exc:
+            raise HTTPError(422, f"Workflow validation could not complete: {exc}", code="H3_WORKFLOW_VALIDATION_ERROR") from exc
 
     def _resolve_render_input(self, project: H3Project, scene: H3Scene) -> Path:
         if scene.mode == "same_character_new_shot":
