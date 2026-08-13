@@ -17,6 +17,7 @@ H3AspectRatio = Literal[
 H3ResolutionMegapixels = Literal[0.4, 0.6, 0.8, 0.9, 1.0]
 H3WorkflowProfileId = Literal[
     "minimax_h3_image_to_video",
+    "minimax_h3_no_reference",
     "ltx_2_5_text_to_video",
     "ltx_2_5_image_to_video",
 ]

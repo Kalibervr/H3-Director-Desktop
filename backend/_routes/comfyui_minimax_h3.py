@@ -23,6 +23,7 @@ from api_types import (
     H3Ltx25ModelImportResponse,
     H3SceneUpdateRequest,
     H3SceneReorderRequest,
+    H3WorkflowProfileId,
     H3RenderRun,
     H3SequenceStartRequest,
     MiniMaxH3RenderRequest,
@@ -37,9 +38,10 @@ router = APIRouter(prefix="/api/comfyui/minimax-h3", tags=["minimax-h3"])
 @router.get("/status", response_model=ComfyUIProbeResponse)
 def route_minimax_h3_status(
     base_url: str = Query(default="http://127.0.0.1:8188"),
+    workflow_profile_id: H3WorkflowProfileId = Query(default="minimax_h3_image_to_video"),
     handler: AppHandler = Depends(get_state_service),
 ) -> ComfyUIProbeResponse:
-    return handler.comfyui_minimax_h3.get_status(base_url)
+    return handler.comfyui_minimax_h3.get_status(base_url, workflow_profile_id)
 
 
 @router.get("/upscale/availability", response_model=H3UpscaleAvailabilityResponse)

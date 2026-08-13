@@ -83,6 +83,29 @@ REQUIRED_LINKS: tuple[tuple[str, str, list[object]], ...] = (
     ("105:107", "values.a", ["105:111", 0]),
 )
 
+# Prompt Only is the same MiniMax H3 node with both optional image inputs omitted.
+# Keep this contract separate from the I2V contract above so neither profile weakens
+# the other's preflight requirements.
+NO_REFERENCE_REQUIRED_CLASS_INPUTS: dict[str, frozenset[str]] = {
+    class_type: fields
+    for class_type, fields in REQUIRED_CLASS_INPUTS.items()
+    if class_type not in {"GetImageSize", "ImageScaleToTotalPixels", "LoadImage"}
+}
+
+NO_REFERENCE_EXPECTED_WORKFLOW_NODES: dict[str, tuple[str, frozenset[str]]] = {
+    node_id: (class_type, fields)
+    for node_id, (class_type, fields) in EXPECTED_WORKFLOW_NODES.items()
+    if node_id != "114"
+}
+NO_REFERENCE_EXPECTED_WORKFLOW_NODES["105:104"] = (
+    "MiniMaxH3ImageToVideo",
+    frozenset({"prompt", "width", "height", "length", "clip", "vae"}),
+)
+
+NO_REFERENCE_REQUIRED_LINKS: tuple[tuple[str, str, list[object]], ...] = tuple(
+    link for link in REQUIRED_LINKS if link[:2] != ("105:104", "first_frame")
+)
+
 
 @dataclass(frozen=True)
 class WorkflowValidation:
@@ -127,7 +150,15 @@ def _is_api_node(value: object) -> bool:
     return node is not None and isinstance(node.get("class_type"), str) and isinstance(node.get("inputs"), dict)
 
 
-def validate_workflow_contract(workflow: object, object_info: object) -> WorkflowValidation:
+def _validate_workflow_contract(
+    workflow: object,
+    object_info: object,
+    *,
+    required_class_inputs: dict[str, frozenset[str]],
+    expected_workflow_nodes: dict[str, tuple[str, frozenset[str]]],
+    required_links: tuple[tuple[str, str, list[object]], ...],
+    no_reference: bool = False,
+) -> WorkflowValidation:
     errors: list[str] = []
     workflow_object = _as_object(workflow)
     object_info_object = _as_object(object_info)
@@ -137,12 +168,12 @@ def validate_workflow_contract(workflow: object, object_info: object) -> Workflo
         return WorkflowValidation(False, ("ComfyUI node metadata is not a JSON object.",))
 
     workflow_classes = {cast(str, node["class_type"]) for node in workflow_object.values()}
-    if not set(REQUIRED_CLASS_INPUTS).issubset(workflow_classes):
+    if not set(required_class_inputs).issubset(workflow_classes):
         errors.append("Workflow does not contain every required node type.")
-    if not set(REQUIRED_CLASS_INPUTS).issubset(object_info_object):
+    if not set(required_class_inputs).issubset(object_info_object):
         errors.append("ComfyUI node metadata is missing required node types.")
 
-    for node_id, (expected_class, expected_inputs) in EXPECTED_WORKFLOW_NODES.items():
+    for node_id, (expected_class, expected_inputs) in expected_workflow_nodes.items():
         node = _as_object(workflow_object.get(node_id))
         if node is None or node.get("class_type") != expected_class:
             errors.append("Workflow contract has a missing or changed required node.")
@@ -151,7 +182,7 @@ def validate_workflow_contract(workflow: object, object_info: object) -> Workflo
         if not expected_inputs.issubset(inputs):
             errors.append("Workflow contract has a missing required input field.")
 
-    for node_id, input_name, expected_link in REQUIRED_LINKS:
+    for node_id, input_name, expected_link in required_links:
         node = _as_object(workflow_object.get(node_id)) or {}
         inputs = _as_object(node.get("inputs")) or {}
         if inputs.get(input_name) != expected_link:
@@ -172,7 +203,7 @@ def validate_workflow_contract(workflow: object, object_info: object) -> Workflo
         if inputs.get(input_name) != filename:
             errors.append("Workflow contract has a changed required model selection.")
 
-    for class_type, required_fields in REQUIRED_CLASS_INPUTS.items():
+    for class_type, required_fields in required_class_inputs.items():
         class_info = _as_object(object_info_object.get(class_type))
         if class_info is None:
             continue
@@ -186,7 +217,36 @@ def validate_workflow_contract(workflow: object, object_info: object) -> Workflo
     if save_video_info.get("output_node") is not True:
         errors.append("ComfyUI SaveVideo is not advertised as an output node.")
 
+    if no_reference:
+        minimax_node = _as_object(workflow_object.get("105:104")) or {}
+        minimax_inputs = _as_object(minimax_node.get("inputs")) or {}
+        if "first_frame" in minimax_inputs or "last_frame" in minimax_inputs or "114" in workflow_object:
+            errors.append("Prompt Only workflow must not include an image input.")
+
     return WorkflowValidation(not errors, tuple(dict.fromkeys(errors)))
+
+
+def validate_workflow_contract(workflow: object, object_info: object) -> WorkflowValidation:
+    """Validate the immutable MiniMax H3 Image-to-Video contract."""
+    return _validate_workflow_contract(
+        workflow,
+        object_info,
+        required_class_inputs=REQUIRED_CLASS_INPUTS,
+        expected_workflow_nodes=EXPECTED_WORKFLOW_NODES,
+        required_links=REQUIRED_LINKS,
+    )
+
+
+def validate_no_reference_workflow_contract(workflow: object, object_info: object) -> WorkflowValidation:
+    """Validate the immutable MiniMax H3 Prompt Only contract without image assumptions."""
+    return _validate_workflow_contract(
+        workflow,
+        object_info,
+        required_class_inputs=NO_REFERENCE_REQUIRED_CLASS_INPUTS,
+        expected_workflow_nodes=NO_REFERENCE_EXPECTED_WORKFLOW_NODES,
+        required_links=NO_REFERENCE_REQUIRED_LINKS,
+        no_reference=True,
+    )
 
 
 def _requests_get_json(url: str, timeout_seconds: float) -> object:
@@ -208,9 +268,15 @@ class ComfyUIRuntimeProbe:
         *,
         base_url: str,
         workflow: object,
+        profile_id: Literal["minimax_h3_image_to_video", "minimax_h3_no_reference"] = "minimax_h3_image_to_video",
         production_runtime: bool = False,
         timeout_seconds: float = 5.0,
     ) -> RuntimeProbeResult:
+        required_class_inputs = (
+            NO_REFERENCE_REQUIRED_CLASS_INPUTS
+            if profile_id == "minimax_h3_no_reference"
+            else REQUIRED_CLASS_INPUTS
+        )
         try:
             normalized_url = require_loopback_http_url(base_url)
             if urlsplit(normalized_url).scheme != "http":
@@ -220,7 +286,7 @@ class ComfyUIRuntimeProbe:
                 status="incompatible",
                 comfyui_version=None,
                 required_nodes_present=(),
-                required_nodes_missing=tuple(sorted(REQUIRED_CLASS_INPUTS)),
+                required_nodes_missing=tuple(sorted(required_class_inputs)),
                 required_models_present=(),
                 required_models_missing=tuple(sorted(REQUIRED_MODELS)),
                 workflow_contract_valid=False,
@@ -235,7 +301,7 @@ class ComfyUIRuntimeProbe:
                 status="unavailable",
                 comfyui_version=None,
                 required_nodes_present=(),
-                required_nodes_missing=tuple(sorted(REQUIRED_CLASS_INPUTS)),
+                required_nodes_missing=tuple(sorted(required_class_inputs)),
                 required_models_present=(),
                 required_models_missing=tuple(sorted(REQUIRED_MODELS)),
                 workflow_contract_valid=False,
@@ -247,8 +313,8 @@ class ComfyUIRuntimeProbe:
         version = system.get("comfyui_version") if isinstance(system.get("comfyui_version"), str) else None
         object_info_object = _as_object(object_info) or {}
 
-        present_nodes = tuple(sorted(class_type for class_type in REQUIRED_CLASS_INPUTS if class_type in object_info_object))
-        missing_nodes = tuple(sorted(set(REQUIRED_CLASS_INPUTS) - set(present_nodes)))
+        present_nodes = tuple(sorted(class_type for class_type in required_class_inputs if class_type in object_info_object))
+        missing_nodes = tuple(sorted(set(required_class_inputs) - set(present_nodes)))
         present_models = tuple(
             sorted(
                 filename
@@ -257,7 +323,11 @@ class ComfyUIRuntimeProbe:
             )
         )
         missing_models = tuple(sorted(set(REQUIRED_MODELS) - set(present_models)))
-        validation = validate_workflow_contract(workflow, object_info_object)
+        validation = (
+            validate_no_reference_workflow_contract(workflow, object_info_object)
+            if profile_id == "minimax_h3_no_reference"
+            else validate_workflow_contract(workflow, object_info_object)
+        )
 
         errors = list(validation.errors)
         if missing_nodes:

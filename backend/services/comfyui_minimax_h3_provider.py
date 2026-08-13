@@ -29,6 +29,7 @@ from api_types import H3_RESOLUTION_PRESETS
 
 JsonObject = dict[str, Any]
 VERIFIED_WORKFLOW_SHA256 = "51febcadb3d33f2850f2a9ec905e16c34c8ac3d28d70b3fdbe6c228addc55030"
+NO_REFERENCE_WORKFLOW_SHA256 = "975e61acfa981b0268bd97e5d5fa72696d0f19a2ceedd18ccefdbea6cdaa5be1"
 VERIFIED_WIDTH = 640
 VERIFIED_HEIGHT = 640
 VERIFIED_DURATION_SECONDS = 5.0
@@ -75,6 +76,31 @@ class SingleSceneRequest:
     fps: int = VERIFIED_FPS
     output_filename_prefix: str = "MiniMax_H3"
     managed_filename_prefix: str | None = None
+    audio_mode: str = "natural_ambience"
+    no_speech: bool = False
+    no_music: bool = False
+    custom_audio_instruction: str = ""
+
+
+@dataclass(frozen=True)
+class PromptOnlySceneRequest:
+    """Contract-only request for H3's verified no-reference graph.
+
+    This is deliberately separate from ``SingleSceneRequest``: it has no image
+    path and no upload operation. A renderer using it is not enabled yet.
+    """
+
+    prompt: str
+    seed: int
+    aspect_ratio: str = "1:1 (Square)"
+    resolution_megapixels: float = 0.4
+    width: int = VERIFIED_WIDTH
+    height: int = VERIFIED_HEIGHT
+    duration_seconds: float = VERIFIED_DURATION_SECONDS
+    fps: int = VERIFIED_FPS
+    output_filename_prefix: str = "MiniMax_H3_NoReference"
+    managed_filename_prefix: str | None = None
+    original_prompt: str | None = None
     audio_mode: str = "natural_ambience"
     no_speech: bool = False
     no_music: bool = False
@@ -214,6 +240,36 @@ def load_verified_workflow(path: Path) -> JsonObject:
         raise ProviderError("The verified MiniMax H3 workflow is invalid.") from exc
 
 
+def load_verified_no_reference_workflow(path: Path) -> JsonObject:
+    """Load the immutable, locally executed prompt-only H3 graph.
+
+    This loader intentionally does not make the graph renderable through the
+    product yet; it supplies a strict provider seam for a future binding.
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ProviderError("The verified MiniMax H3 no-reference workflow is unavailable.") from exc
+    if hashlib.sha256(raw).hexdigest() != NO_REFERENCE_WORKFLOW_SHA256:
+        raise ProviderError("The verified MiniMax H3 no-reference workflow has changed.")
+    try:
+        workflow = _json_object(json.loads(raw))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ProviderError("The verified MiniMax H3 no-reference workflow is invalid.") from exc
+    _validate_no_reference_workflow(workflow)
+    return workflow
+
+
+def _validate_no_reference_workflow(workflow: JsonObject) -> None:
+    """Fail closed if the no-reference contract accidentally regains an image path."""
+    node = _json_object(workflow.get("105:104"))
+    if node.get("class_type") != "MiniMaxH3ImageToVideo":
+        raise ProviderError("The no-reference workflow has an incompatible MiniMax H3 node.")
+    inputs = _json_object(node.get("inputs"))
+    if "first_frame" in inputs or "last_frame" in inputs or "114" in workflow:
+        raise ProviderError("The no-reference workflow must not include an image input.")
+
+
 def build_prompt_payload(
     template: JsonObject,
     request: SingleSceneRequest,
@@ -253,6 +309,41 @@ def build_prompt_payload(
     workflow["92"]["inputs"]["filename_prefix"] = (
         f"h3-director/{request.output_filename_prefix}_{client_id[:8]}"
     )
+    return {"prompt": workflow, "client_id": client_id}
+
+
+def build_no_reference_prompt_payload(
+    template: JsonObject,
+    request: PromptOnlySceneRequest,
+    client_id: str,
+) -> JsonObject:
+    """Build the future prompt-only payload without staging or uploading media."""
+    _validate_no_reference_workflow(template)
+    if not request.prompt.strip():
+        raise ProviderError("A prompt is required.")
+    presets = H3_RESOLUTION_PRESETS.get(request.aspect_ratio)
+    if presets is None or presets.get(request.resolution_megapixels) != (request.width, request.height):
+        raise ProviderError("The selected aspect-ratio preset has incompatible dimensions.")
+    if request.duration_seconds <= 0:
+        raise ProviderError("Duration must be greater than zero.")
+    if request.fps != VERIFIED_FPS:
+        raise ProviderError("Only the verified 24 FPS rate is currently supported.")
+    if request.seed < 0 or request.seed > 0xFFFFFFFFFFFFFFFF:
+        raise ProviderError("Seed is outside the verified node range.")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", request.output_filename_prefix):
+        raise ProviderError("Output filename prefix contains unsupported characters.")
+
+    workflow = copy.deepcopy(template)
+    workflow["105:104"]["inputs"]["prompt"] = request.prompt.strip()
+    workflow["105:15"]["inputs"]["noise_seed"] = request.seed
+    workflow["115"]["inputs"].update({
+        "aspect_ratio": request.aspect_ratio,
+        "megapixels": request.resolution_megapixels,
+        "multiple": 32,
+    })
+    workflow["105:111"]["inputs"]["value"] = request.duration_seconds
+    workflow["105:91"]["inputs"]["fps"] = request.fps
+    workflow["92"]["inputs"]["filename_prefix"] = f"h3-director/{request.output_filename_prefix}_{client_id[:8]}"
     return {"prompt": workflow, "client_id": client_id}
 
 
@@ -409,6 +500,72 @@ def create_immutable_render_version(
     return version_dir, output, metadata
 
 
+def create_immutable_no_reference_render_version(
+    render_root: Path,
+    source_output: Path,
+    prompt_id: str,
+    request: PromptOnlySceneRequest,
+    video: VideoProbe,
+    elapsed_seconds: float,
+) -> tuple[Path, Path, Path]:
+    """Adopt a prompt-only result without inventing an image provenance record."""
+    render_root.mkdir(parents=True, exist_ok=True)
+    version_dir: Path | None = None
+    for number in range(1, 10000):
+        candidate = render_root / f"v{number:03d}"
+        try:
+            candidate.mkdir()
+            version_dir = candidate
+            break
+        except FileExistsError:
+            continue
+    if version_dir is None:
+        raise ProviderError("No immutable render version slot is available.")
+    number = int(version_dir.name.removeprefix("v"))
+    output = version_dir / (f"{request.managed_filename_prefix}_v{number:03d}.mp4" if request.managed_filename_prefix else "video.mp4")
+    metadata = version_dir / ("render-metadata.json" if request.managed_filename_prefix else "metadata.json")
+    try:
+        shutil.copy2(source_output, output)
+        payload = {
+            "schema_version": 1,
+            "provider": "ComfyUIMiniMaxH3Provider",
+            "workflow_profile_id": "minimax_h3_no_reference",
+            "model_family": "MiniMax H3",
+            "mode": "prompt_only",
+            "reference_image_used": False,
+            "created_at": datetime.now(UTC).isoformat(),
+            "prompt_id": prompt_id,
+            "prompt": request.prompt,
+            "original_user_prompt": request.original_prompt or request.prompt,
+            "final_composed_prompt": request.prompt,
+            "audio_guidance": {"audio_mode": request.audio_mode, "no_speech": request.no_speech, "no_music": request.no_music, "custom_audio_instruction": request.custom_audio_instruction},
+            "aspect_ratio": request.aspect_ratio,
+            "resolution_megapixels": request.resolution_megapixels,
+            "width": request.width,
+            "height": request.height,
+            "duration_seconds": request.duration_seconds,
+            "frame_count": video.frame_count,
+            "fps": request.fps,
+            "seed": request.seed,
+            "workflow_sha256": NO_REFERENCE_WORKFLOW_SHA256,
+            "model_filenames": ["minimax_h3_fl2va_pruned_int8_convrot.safetensors", "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", "minimax_h3_video_vae_fp16.safetensors", "minimax_h3_audio_vae_fp32.safetensors"],
+            "render_elapsed_seconds": elapsed_seconds,
+            "output_sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
+            "ffprobe": asdict(video),
+        }
+        temporary = version_dir / f".metadata.{uuid.uuid4().hex}.tmp"
+        with temporary.open("x", encoding="utf-8", newline="\n") as stream:
+            json.dump(payload, stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, metadata)
+    except (OSError, ValueError) as exc:
+        shutil.rmtree(version_dir, ignore_errors=True)
+        raise ProviderError("The immutable render version could not be created.") from exc
+    return version_dir, output, metadata
+
+
 class ComfyUIMiniMaxH3Provider:
     """Development provider; it connects to but does not own the ComfyUI lifecycle."""
 
@@ -552,6 +709,108 @@ class ComfyUIMiniMaxH3Provider:
         video = probe_video(self._ffprobe_path, source_output)
         version_dir, output, metadata = create_immutable_render_version(
             self._render_root, source_output, prompt_id, request, video
+        )
+        return RenderResult(prompt_id, source_output, version_dir, output, metadata, video)
+
+    def render_prompt_only(
+        self,
+        *,
+        base_url: str,
+        request: PromptOnlySceneRequest,
+        timeout_seconds: float = 1800.0,
+        poll_interval_seconds: float = 2.0,
+        status_callback: Callable[[str, str | None, int | None, int | None, str | None], None] | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> RenderResult:
+        """Render the verified no-reference graph; it deliberately never uploads media."""
+        started = time.monotonic()
+
+        def report(status: str, prompt_id: str | None = None, value: int | None = None, maximum: int | None = None, diagnostics: str | None = None) -> None:
+            if status_callback is not None:
+                status_callback(status, prompt_id, value, maximum, diagnostics)
+
+        def cancelled() -> bool:
+            return cancel_requested is not None and cancel_requested()
+
+        try:
+            normalized_url = require_loopback_http_url(base_url)
+            if urlsplit(normalized_url).scheme != "http":
+                raise ValueError
+        except ValueError as exc:
+            raise ProviderError("ComfyUI URL must be a loopback HTTP address.") from exc
+
+        def interrupt(prompt_id: str | None) -> None:
+            try:
+                if prompt_id:
+                    self._session.post(f"{normalized_url}/queue", json={"delete": [prompt_id]}, timeout=10.0, allow_redirects=False)
+                self._session.post(f"{normalized_url}/interrupt", json={}, timeout=10.0, allow_redirects=False)
+            except requests.RequestException:
+                pass
+            raise RenderCancelled("The render was cancelled by the user.")
+
+        report("Preparing")
+        if cancelled():
+            interrupt(None)
+        template = load_verified_no_reference_workflow(self._workflow_path)
+        runtime = self._runtime_probe.probe(
+            base_url=normalized_url,
+            workflow=template,
+            profile_id="minimax_h3_no_reference",
+        )
+        if runtime.status != "connected":
+            raise ProviderError("Local ComfyUI is unavailable or incompatible with the verified no-reference workflow.")
+        client_id = uuid.uuid4().hex
+        payload = build_no_reference_prompt_payload(template, request, client_id)
+        websocket_url = normalized_url.replace("http://", "ws://", 1) + f"/ws?clientId={client_id}"
+        try:
+            with websocket_connect(websocket_url, open_timeout=15, close_timeout=5, max_size=16 * 1024 * 1024) as websocket:
+                response = self._session.post(f"{normalized_url}/prompt", json=payload, timeout=30.0, allow_redirects=False)
+                submission = _json_object(_safe_json(response))
+                prompt_id = submission.get("prompt_id")
+                if not isinstance(prompt_id, str) or not prompt_id:
+                    raise ProviderError("Local ComfyUI did not return a prompt ID.")
+                report("Submitted", prompt_id)
+                while True:
+                    if cancelled():
+                        interrupt(prompt_id)
+                    try:
+                        message = websocket.recv(timeout=min(2.0, poll_interval_seconds))
+                    except TimeoutError:
+                        continue
+                    update = parse_comfyui_progress_event(message, prompt_id)
+                    if update is None:
+                        continue
+                    report(update.phase, prompt_id, update.value, update.maximum, update.diagnostics)
+                    if update.terminal == "error":
+                        raise ProviderError("Local ComfyUI failed while rendering the scene.")
+                    if update.terminal == "success":
+                        break
+        except ProviderError:
+            raise
+        except (OSError, TimeoutError, requests.RequestException, WebSocketException) as exc:
+            raise ProviderError("The local ComfyUI progress stream became unavailable.") from exc
+
+        deadline = time.monotonic() + timeout_seconds
+        source_output: Path | None = None
+        while time.monotonic() < deadline:
+            if cancelled():
+                interrupt(prompt_id)
+            try:
+                response = self._session.get(f"{normalized_url}/history/{quote(prompt_id, safe='')}", timeout=30.0, allow_redirects=False)
+                source_output = discover_output(_safe_json(response), prompt_id, self._output_root)
+            except ProviderError:
+                raise
+            except requests.RequestException as exc:
+                raise ProviderError("Local ComfyUI history is unavailable.") from exc
+            if source_output is not None:
+                break
+            self._sleep(poll_interval_seconds)
+        if source_output is None:
+            raise ProviderError("The local ComfyUI render timed out.")
+        report("Verifying", prompt_id)
+        video = probe_video(self._ffprobe_path, source_output)
+        version_dir, output, metadata = create_immutable_no_reference_render_version(
+            self._render_root, source_output, prompt_id, request, video, time.monotonic() - started,
         )
         return RenderResult(prompt_id, source_output, version_dir, output, metadata, video)
 

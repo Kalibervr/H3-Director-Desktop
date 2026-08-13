@@ -27,8 +27,9 @@ class FakeProvider:
 
 
 class FakeWorkspaceHandler:
-    def get_status(self, base_url: str) -> ComfyUIProbeResponse:
+    def get_status(self, base_url: str, workflow_profile_id: str = "minimax_h3_image_to_video") -> ComfyUIProbeResponse:
         assert base_url == "http://127.0.0.1:8188"
+        assert workflow_profile_id in {"minimax_h3_image_to_video", "minimax_h3_no_reference"}
         return ComfyUIProbeResponse(
             status="connected",
             comfyui_version="0.30.2",
@@ -115,6 +116,13 @@ def test_workspace_status_route_returns_sanitized_status(client, test_state) -> 
     assert payload["comfyui_version"] == "0.30.2"
     assert "workflow" not in payload
     assert "object_info" not in payload
+
+
+def test_workspace_status_route_accepts_the_prompt_only_profile(client, test_state) -> None:
+    test_state.comfyui_minimax_h3 = FakeWorkspaceHandler()
+    response = client.get("/api/comfyui/minimax-h3/status?workflow_profile_id=minimax_h3_no_reference")
+    assert response.status_code == 200
+    assert response.json()["status"] == "connected"
 
 
 def test_workspace_render_route_returns_only_safe_result(client, test_state) -> None:

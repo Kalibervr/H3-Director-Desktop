@@ -32,6 +32,10 @@ Before enabling a new model, verify its local license/distribution terms, local 
 
 `ltx_2_5_text_to_video` remains unavailable. No installed T2V template or execution evidence has been captured.
 
+## MiniMax H3 no-reference contract
+
+`minimax_h3_no_reference` is an enabled `runtime_verified` Prompt Only profile. The installed `MiniMaxH3ImageToVideo` node is used with both optional image inputs omitted; it is documented in [MINIMAX_H3_NO_REFERENCE_WORKFLOW_CONTRACT.md](MINIMAX_H3_NO_REFERENCE_WORKFLOW_CONTRACT.md). One H3 Director-originated project render verified only 1:1 / 640×640 / 24 FPS / 5 seconds / 124 frames with audio. It is not presented as a separately proven MiniMax Text-to-Video model. Image-based continuity, reference controls, and all other Prompt Only resolutions, durations, and FPS values remain unavailable.
+
 ### Turbo and LoRA variants
 
 Profiles may later declare verified variants and optional LoRAs, including compatible profile version, required model entry, strength/range, and explicitly mapped workflow parameters. A Turbo or LoRA option remains unavailable until its workflow, required sampler/steps changes, files, and output are verified locally.

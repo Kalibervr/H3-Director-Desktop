@@ -47,8 +47,11 @@ async function readJson<T>(response: Response): Promise<T> {
   return payload as T
 }
 
-export async function getH3RuntimeStatus(baseUrl: string): Promise<H3RuntimeStatus> {
-  const response = await backendFetch(`/api/comfyui/minimax-h3/status?base_url=${encodeURIComponent(baseUrl)}`)
+export async function getH3RuntimeStatus(
+  baseUrl: string,
+  workflowProfileId: 'minimax_h3_image_to_video' | 'minimax_h3_no_reference' = 'minimax_h3_image_to_video',
+): Promise<H3RuntimeStatus> {
+  const response = await backendFetch(`/api/comfyui/minimax-h3/status?base_url=${encodeURIComponent(baseUrl)}&workflow_profile_id=${encodeURIComponent(workflowProfileId)}`)
   return readJson<H3RuntimeStatus>(response)
 }
 

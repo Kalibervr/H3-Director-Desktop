@@ -44,6 +44,8 @@ from services.comfyui_minimax_h3_provider import (
     ProviderError,
     RenderCancelled,
     SingleSceneRequest,
+    PromptOnlySceneRequest,
+    load_verified_no_reference_workflow,
     load_verified_workflow,
 )
 from services.comfyui_ltx_2_5_provider import ComfyUILtx25I2VProvider, LtxI2VRequest
@@ -101,6 +103,15 @@ def resolve_ltx_i2v_runtime_paths(render_root_override: Path | None = None) -> H
     repository_or_resources_root = Path(__file__).resolve().parents[2]
     workflow = _environment_path("H3_LTX_2_5_I2V_WORKFLOW_PATH") or (
         repository_or_resources_root / "workflows" / "ltx_2_5_image_to_video_api.json"
+    )
+    return H3RuntimePaths(workflow, paths.comfyui_output, paths.render_root, paths.ffprobe, paths.ffmpeg)
+
+
+def resolve_minimax_h3_no_reference_runtime_paths(render_root_override: Path | None = None) -> H3RuntimePaths:
+    paths = resolve_h3_runtime_paths(render_root_override)
+    repository_or_resources_root = Path(__file__).resolve().parents[2]
+    workflow = _environment_path("H3_MINIMAX_NO_REFERENCE_WORKFLOW_PATH") or (
+        repository_or_resources_root / "workflows" / "minimax_h3_no_reference_api.json"
     )
     return H3RuntimePaths(workflow, paths.comfyui_output, paths.render_root, paths.ffprobe, paths.ffmpeg)
 
@@ -307,9 +318,16 @@ class ComfyUIMiniMaxH3Handler:
         except ProjectStoreError as exc:
             raise HTTPError(422, str(exc), code="H3_SEQUENCE_ERROR") from exc
 
-    def get_status(self, base_url: str) -> ComfyUIProbeResponse:
+    def get_status(
+        self,
+        base_url: str,
+        workflow_profile_id: str = "minimax_h3_image_to_video",
+    ) -> ComfyUIProbeResponse:
         try:
-            workflow = load_verified_workflow(resolve_h3_runtime_paths().workflow)
+            if workflow_profile_id == "minimax_h3_no_reference":
+                workflow = load_verified_no_reference_workflow(resolve_minimax_h3_no_reference_runtime_paths().workflow)
+            else:
+                workflow = load_verified_workflow(resolve_h3_runtime_paths().workflow)
         except ProviderError as exc:
             return ComfyUIProbeResponse(
                 status="incompatible",
@@ -321,7 +339,12 @@ class ComfyUIMiniMaxH3Handler:
                 workflow_contract_valid=False,
                 errors=[str(exc)],
             )
-        result = self._runtime_probe.probe(base_url=base_url, workflow=workflow, production_runtime=True)
+        result = self._runtime_probe.probe(
+            base_url=base_url,
+            workflow=workflow,
+            profile_id=("minimax_h3_no_reference" if workflow_profile_id == "minimax_h3_no_reference" else "minimax_h3_image_to_video"),
+            production_runtime=True,
+        )
         return ComfyUIProbeResponse(
             status=result.status,
             comfyui_version=result.comfyui_version,
@@ -374,6 +397,8 @@ class ComfyUIMiniMaxH3Handler:
             project = self._project_store.get_project(project_id)
             if project.workflow_profile_id == "ltx_2_5_image_to_video":
                 return self._render_ltx_i2v_project_scene(project, scene_id, request)
+            if project.workflow_profile_id == "minimax_h3_no_reference":
+                return self._render_minimax_h3_no_reference_project_scene(project, scene_id, request)
             if project.workflow_profile_id != "minimax_h3_image_to_video":
                 raise ProjectStoreError("This workflow profile is not verified for local rendering.")
             scene = next((item for item in project.scenes if item.id == scene_id), None)
@@ -484,6 +509,66 @@ class ComfyUIMiniMaxH3Handler:
             except ProjectStoreError:
                 pass
             raise HTTPError(422, safe_error, code="MINIMAX_H3_RENDER_FAILED") from exc
+
+    def _render_minimax_h3_no_reference_project_scene(
+        self,
+        project: H3Project,
+        scene_id: str,
+        request: H3ProjectRenderRequest,
+    ) -> H3Project:
+        """Adopt the verified prompt-only output through the normal H3 version flow."""
+        scene = next((item for item in project.scenes if item.id == scene_id), None)
+        if scene is None:
+            raise ProjectStoreError("The selected scene could not be found.")
+        if not scene.prompt.strip():
+            raise ProjectStoreError("The scene requires a prompt before rendering.")
+        if scene.mode != "new_shot":
+            raise ProjectStoreError("Prompt Only currently supports independent New Shot scenes only.")
+        if (scene.aspect_ratio, scene.resolution_megapixels, scene.width, scene.height, scene.fps, scene.duration_seconds, scene.frame_count) != (
+            "1:1 (Square)", 0.4, 640, 640, 24, 5.0, 124,
+        ):
+            raise ProjectStoreError("Only the verified Prompt Only 1:1 / 640x640 / 24 FPS / 5-second profile is enabled.")
+        final_prompt = compose_h3_prompt(scene.prompt, H3AudioGuidance(
+            mode=scene.audio_mode, no_speech=scene.no_speech, no_music=scene.no_music,
+            custom_instruction=scene.custom_audio_instruction,
+        ))
+        scene_root = Path(project.project_root) / "scenes" / scene.storage_name
+        paths = resolve_minimax_h3_no_reference_runtime_paths(scene_root / "renders")
+        provider = self._provider_factory(paths)
+        self._project_store.set_scene_status(project.id, scene.id, "rendering", error=None, phase="Submitting Prompt Only")
+        try:
+            result = provider.render_prompt_only(
+                base_url=request.base_url,
+                request=PromptOnlySceneRequest(
+                    prompt=final_prompt, original_prompt=scene.prompt, seed=scene.seed,
+                    aspect_ratio=scene.aspect_ratio, resolution_megapixels=scene.resolution_megapixels,
+                    width=scene.width, height=scene.height, duration_seconds=scene.duration_seconds,
+                    fps=scene.fps, output_filename_prefix=f"prompt_only_scene_{scene.order:03d}",
+                    managed_filename_prefix=f"Scene{scene.order:02d}", audio_mode=scene.audio_mode,
+                    no_speech=scene.no_speech, no_music=scene.no_music,
+                    custom_audio_instruction=scene.custom_audio_instruction,
+                ),
+            )
+            payload = json.loads(result.metadata_file.read_text(encoding="utf-8"))
+            version = H3RenderVersion(
+                id=result.render_directory.name, number=int(result.render_directory.name.removeprefix("v")),
+                created_at=str(payload["created_at"]), root=str(result.render_directory),
+                video_file=str(result.output_file), metadata_file=str(result.metadata_file),
+                prompt=scene.prompt, final_prompt=final_prompt, audio_mode=scene.audio_mode,
+                no_speech=scene.no_speech, no_music=scene.no_music,
+                custom_audio_instruction=scene.custom_audio_instruction,
+                input_image_reference="No reference image used", seed=scene.seed, width=scene.width,
+                height=scene.height, fps=scene.fps, duration_seconds=scene.duration_seconds,
+                frame_count=result.video.frame_count, prompt_id=result.prompt_id,
+                input_image_sha256="not-applicable", workflow_sha256=str(payload["workflow_sha256"]),
+                output_sha256=str(payload["output_sha256"]), ffprobe=MiniMaxH3VideoProbeResponse(**result.video.__dict__),
+            )
+            updated = self._project_store.add_render_version(project.id, scene.id, version)
+            return self._project_store.set_scene_status(updated.id, scene.id, "complete", error=None, phase="Complete")
+        except (ProviderError, ProjectStoreError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            safe_error = str(exc) if isinstance(exc, (ProviderError, ProjectStoreError)) else "The local Prompt Only render could not be adopted safely."
+            self._project_store.set_scene_status(project.id, scene.id, "failed", error=safe_error, phase="Failed")
+            raise HTTPError(422, safe_error, code="MINIMAX_H3_NO_REFERENCE_RENDER_FAILED") from exc
 
     def _render_ltx_i2v_project_scene(
         self,

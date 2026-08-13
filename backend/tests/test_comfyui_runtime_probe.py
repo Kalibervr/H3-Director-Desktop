@@ -13,6 +13,7 @@ from services.comfyui_runtime_probe import (
     REQUIRED_MODELS,
     REQUIRED_OPTIONAL_CLASS_INPUTS,
     ComfyUIRuntimeProbe,
+    validate_no_reference_workflow_contract,
     validate_workflow_contract,
 )
 
@@ -72,10 +73,37 @@ def _object_info() -> dict[str, object]:
     return info
 
 
+def _no_reference_workflow() -> dict[str, object]:
+    workflow = _workflow()
+    for node_id in ("114", "119", "120"):
+        del workflow[node_id]
+    minimax = workflow["105:104"]
+    assert isinstance(minimax, dict) and isinstance(minimax["inputs"], dict)
+    del minimax["inputs"]["first_frame"]
+    return workflow
+
+
 def test_validates_verified_api_contract() -> None:
     result = validate_workflow_contract(_workflow(), _object_info())
     assert result.valid
     assert result.errors == ()
+
+
+def test_prompt_only_contract_passes_without_i2v_image_requirements() -> None:
+    result = validate_no_reference_workflow_contract(_no_reference_workflow(), _object_info())
+    assert result.valid
+    assert result.errors == ()
+
+
+def test_prompt_only_contract_rejects_an_image_input_without_weakening_i2v() -> None:
+    prompt_only = _no_reference_workflow()
+    minimax = prompt_only["105:104"]
+    assert isinstance(minimax, dict) and isinstance(minimax["inputs"], dict)
+    minimax["inputs"]["first_frame"] = ["114", 0]
+    result = validate_no_reference_workflow_contract(prompt_only, _object_info())
+    assert not result.valid
+    assert result.errors == ("Prompt Only workflow must not include an image input.",)
+    assert validate_workflow_contract(_workflow(), _object_info()).valid
 
 
 @pytest.mark.parametrize("workflow", [[], {}, {"nodes": [], "links": []}, {"1": {"class_type": "LoadImage"}}])
@@ -143,6 +171,41 @@ def test_probe_calls_only_two_read_only_endpoints_and_returns_sanitized_status()
         ("http://127.0.0.1:8188/system_stats", 5.0),
         ("http://127.0.0.1:8188/object_info", 5.0),
     ]
+
+
+def test_prompt_only_probe_uses_its_own_node_requirements() -> None:
+    def get_json(url: str, _timeout: float) -> object:
+        if url.endswith("/system_stats"):
+            return {"system": {"comfyui_version": "0.32.0", "argv": []}}
+        object_info = _object_info()
+        for i2v_only in ("LoadImage", "GetImageSize", "ImageScaleToTotalPixels"):
+            del object_info[i2v_only]
+        return object_info
+
+    result = ComfyUIRuntimeProbe(get_json).probe(
+        base_url="http://127.0.0.1:8188",
+        workflow=_no_reference_workflow(),
+        profile_id="minimax_h3_no_reference",
+    )
+    assert result.status == "connected"
+    assert not result.required_nodes_missing
+    assert result.workflow_contract_valid
+
+
+def test_i2v_probe_still_requires_its_image_contract() -> None:
+    def get_json(url: str, _timeout: float) -> object:
+        if url.endswith("/system_stats"):
+            return {"system": {"comfyui_version": "0.32.0", "argv": []}}
+        object_info = _object_info()
+        del object_info["LoadImage"]
+        return object_info
+
+    result = ComfyUIRuntimeProbe(get_json).probe(
+        base_url="http://127.0.0.1:8188",
+        workflow=_workflow(),
+    )
+    assert result.status == "incompatible"
+    assert "LoadImage" in result.required_nodes_missing
 
 
 @pytest.mark.parametrize(
