@@ -70,6 +70,15 @@ def update_plan(runtime: dict[str, Any], owned: bool) -> dict[str, Any]:
     if not owned: raise RuntimeManagerError('Only an H3-managed ComfyUI runtime can be updated.')
     if runtime.get('dirty'): raise RuntimeManagerError('Local modifications detected in the managed runtime. Update is blocked by default.')
     return {'dry_run':False,'steps':['verify no active render','stop owned runtime','create complete rollback snapshot','git fetch/pull configured official remote','reconcile only required dependencies','restart','query object_info','validate built-in profiles'],'shared_models_modified':False}
+def perform_official_git_update(runtime: dict[str, Any], owned: bool) -> dict[str, Any]:
+    """Run only a fast-forward update of the configured runtime origin after shutdown."""
+    update_plan(runtime, owned)
+    root=Path(str(runtime['root']))
+    if not runtime.get('git_backed'): raise RuntimeManagerError('No supported official git updater is available for this runtime.')
+    if _run(['git','fetch','origin'],root) is None: raise RuntimeManagerError('Official runtime update fetch failed; rollback snapshot remains available.')
+    old=runtime.get('git_revision')
+    if _run(['git','merge','--ff-only','FETCH_HEAD'],root) is None: raise RuntimeManagerError('Official runtime update could not fast-forward; local runtime was not overwritten.')
+    return {'status':'updated_pending_restart','old_revision':old,'new_revision':_run(['git','rev-parse','HEAD'],root),'source':'origin/HEAD','dependencies_changed':False}
 def rollback_plan(snapshot: Path, owned: bool) -> dict[str, Any]:
     if not owned: raise RuntimeManagerError('Only an H3-managed ComfyUI runtime can be rolled back.')
     if not snapshot.is_file(): raise RuntimeManagerError('Selected rollback manifest does not exist.')

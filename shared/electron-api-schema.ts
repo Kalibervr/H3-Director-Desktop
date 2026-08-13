@@ -100,6 +100,10 @@ export const electronAPISchemas = {
   startComfyRuntime: { input: z.object({}), output: comfyRuntimeStatus },
   stopComfyRuntime: { input: z.object({}), output: comfyRuntimeStatus },
   restartComfyRuntime: { input: z.object({}), output: comfyRuntimeStatus },
+  performComfyMaintenance: {
+    input: z.object({ action: z.enum(['checkUpdate', 'reviewUpdate', 'performUpdate', 'listSnapshots', 'performRollback']), snapshotId: z.string().regex(/^\d{8}T\d{6}Z$/).optional() }),
+    output: z.object({ status: z.string(), detail: z.object({ message: z.string().optional() }).passthrough().optional() }),
+  },
   getOllamaRuntimeConfig: { input: z.object({}), output: ollamaRuntimeConfig },
   saveOllamaRuntimeConfig: { input: z.object({ config: ollamaRuntimeConfig }), output: ollamaRuntimeConfig },
   getOllamaRuntimeStatus: { input: z.object({}), output: ollamaRuntimeStatus },

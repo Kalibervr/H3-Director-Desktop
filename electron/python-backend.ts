@@ -53,6 +53,8 @@ export function setGenerationActive(active: boolean): void {
   if (activeGenerationCount === 0) generationActiveSince = null
 }
 
+export function isGenerationActive(): boolean { return activeGenerationCount > 0 }
+
 function isLivenessSuppressed(): boolean {
   return generationActiveSince != null && Date.now() - generationActiveSince < MAX_SUPPRESSION_MS
 }
