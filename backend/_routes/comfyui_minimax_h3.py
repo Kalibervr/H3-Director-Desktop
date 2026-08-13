@@ -17,6 +17,7 @@ from api_types import (
     H3PromptAssistantRequest,
     H3PromptAssistantResponse,
     H3PromptAssistantStatusResponse,
+    H3NextScenePromptRequest, H3NextScenePromptResponse, H3NextSceneSuggestionsResponse,
     H3WorkflowProfileInstallRequest,
     H3WorkflowProfileInstallResponse,
     H3Ltx25ModelImportRequest,
@@ -83,6 +84,14 @@ def route_h3_prompt_assistant_improve(
     handler: AppHandler = Depends(get_state_service),
 ) -> H3PromptAssistantResponse:
     return handler.comfyui_minimax_h3.improve_prompt(request)
+
+@router.post("/projects/{project_id}/scenes/{scene_id}/prompt-assistant/develop-next", response_model=H3NextScenePromptResponse)
+def route_develop_next(project_id: str, scene_id: str, request: H3NextScenePromptRequest, handler: AppHandler = Depends(get_state_service)) -> H3NextScenePromptResponse:
+    return handler.comfyui_minimax_h3.develop_next_scene(project_id, scene_id, request)
+
+@router.get("/projects/{project_id}/scenes/{scene_id}/prompt-assistant/suggest-next", response_model=H3NextSceneSuggestionsResponse)
+def route_suggest_next(project_id: str, scene_id: str, handler: AppHandler = Depends(get_state_service)) -> H3NextSceneSuggestionsResponse:
+    return handler.comfyui_minimax_h3.suggest_next_scene(project_id, scene_id)
 
 
 @router.post("/workflow-profiles/install", response_model=H3WorkflowProfileInstallResponse)

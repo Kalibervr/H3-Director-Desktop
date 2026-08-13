@@ -26,6 +26,9 @@ from api_types import (
     H3PromptAssistantRequest,
     H3PromptAssistantResponse,
     H3PromptAssistantStatusResponse,
+    H3NextScenePromptRequest,
+    H3NextScenePromptResponse,
+    H3NextSceneSuggestionsResponse,
     H3WorkflowProfileInstallRequest,
     H3WorkflowProfileInstallResponse,
     H3Ltx25ModelImportRequest,
@@ -273,6 +276,32 @@ class ComfyUIMiniMaxH3Handler:
             )
         except (OllamaPromptAssistantError, ValueError) as exc:
             raise HTTPError(422, str(exc), code="H3_OLLAMA_PROMPT_ERROR") from exc
+
+    def _next_scene_source(self, project: H3Project, scene_id: str) -> tuple[H3Scene, H3Scene, H3RenderVersion]:
+        target = next((item for item in project.scenes if item.id == scene_id), None)
+        if target is None: raise HTTPError(422, "The selected scene could not be found.", code="H3_SEQUENCE_PROMPT_ERROR")
+        prior = [item for item in project.scenes if item.order < target.order]
+        if not prior: raise HTTPError(422, "Develop Next Scene requires a previous completed scene.", code="H3_SEQUENCE_PROMPT_ERROR")
+        source = max(prior, key=lambda item: item.order)
+        version = next((item for item in source.render_versions if item.id == source.selected_render_version_id), None)
+        if version is None: raise HTTPError(422, "The previous scene has no selected completed render version.", code="H3_SEQUENCE_PROMPT_ERROR")
+        return target, source, version
+
+    def develop_next_scene(self, project_id: str, scene_id: str, request: H3NextScenePromptRequest) -> H3NextScenePromptResponse:
+        project = self._project_store.get_project(project_id); target, source, version = self._next_scene_source(project, scene_id)
+        history = " ".join(entry.summary for entry in project.continuity_memory.entries[-3:])
+        context = H3PromptAssistantRequest(endpoint=request.endpoint, model=request.model, raw_prompt=request.current_user_instruction, scene_number=target.order, scene_name=target.name, scene_mode="continue_previous", duration_seconds=target.duration_seconds, aspect_ratio=target.aspect_ratio, width=target.width, height=target.height, fps=target.fps, project_name=project.name, sequence_mode=project.sequence_mode, previous_scene_number=source.order, previous_scene_name=source.name, previous_scene_prompt=history or source.prompt, previous_final_prompt=version.final_submitted_prompt or version.final_prompt, continuity_source_version_id=version.id, audio_mode=target.audio_mode, no_speech=target.no_speech, no_music=target.no_music, custom_audio_instruction=target.custom_audio_instruction)
+        try:
+            developed = OllamaPromptAssistant().improve(context).suggestion; provider = "ollama"
+        except (OllamaPromptAssistantError, ValueError):
+            developed = f"Continue directly from the supplied frame of the previous scene. {request.current_user_instruction.strip()} Preserve only known subject, location, atmosphere, and audio continuity; advance the action without replaying the prior scene."; provider = "deterministic_local"
+        artifact = target.selected_continuity_artifact_id
+        return H3NextScenePromptResponse(provider=provider, developed_prompt=developed, updated_continuity_summary=request.current_user_instruction.strip(), next_scene_summary=request.current_user_instruction.strip(), source_scene_id=source.id, source_render_version_id=version.id, continuity_artifact_id=artifact, message="Review before applying; this draft is not confirmed continuity.")
+
+    def suggest_next_scene(self, project_id: str, scene_id: str) -> H3NextSceneSuggestionsResponse:
+        project = self._project_store.get_project(project_id); _, source, version = self._next_scene_source(project, scene_id)
+        state = next((entry.current_state for entry in reversed(project.continuity_memory.entries) if entry.scene_id == source.id and entry.render_version_id == version.id), source.prompt[:180])
+        return H3NextSceneSuggestionsResponse(options=[f"Continue from the current moment: {state}", "Pause and react to a new sound or movement nearby.", "Move forward into the next nearby space or action."], source_scene_id=source.id, source_render_version_id=version.id)
 
     def install_workflow_profile(self, request: H3WorkflowProfileInstallRequest) -> H3WorkflowProfileInstallResponse:
         """Copies only a validated declarative local package into H3 app data."""

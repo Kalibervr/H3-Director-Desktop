@@ -144,6 +144,14 @@ test('selected render versions expose reproducible prompt and timing details', (
   for (const field of ['raw_user_prompt', 'improved_prompt', 'native_enhanced_prompt', 'final_submitted_prompt', 'native_prompt_enhance', 'render_elapsed_seconds']) assert.match(projectTypes, new RegExp(field))
 })
 
+test('sequence-aware next-scene controls remain separate from Improve Prompt', () => {
+  const sidebar = read('frontend/components/DirectorControlsSidebar.tsx')
+  const client = read('frontend/lib/h3-projects.ts')
+  for (const label of ['Improve Prompt', 'Develop Next Scene', 'Suggest Next Scene', 'Continuity Context']) assert.match(sidebar, new RegExp(label))
+  assert.match(client, /develop-next/)
+  assert.match(client, /suggest-next/)
+})
+
 test('workspace exposes Stop Render and H3 Director product branding', () => {
   const home = read('frontend/views/Home.tsx')
   const window = read('electron/window.ts')

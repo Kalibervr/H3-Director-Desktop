@@ -20,9 +20,11 @@ import {
   createH3Project,
   addH3Scene,
   continueH3FromPrevious,
+  developH3NextScene,
   deleteH3Project,
   deleteH3Scene,
   duplicateH3Scene,
+  suggestH3NextScene,
   getH3Project,
   listH3Projects,
   prepareH3Continuity,
@@ -635,6 +637,21 @@ export function Home() {
     } finally { setPromptAssistantBusy(false) }
   }
 
+  const developNextScene = async () => {
+    if (!project || !scene || promptAssistantBusy || !scene.prompt.trim()) return
+    setPromptAssistantBusy(true); setPromptAssistantMessage('Developing next scene…')
+    try { const result = await developH3NextScene(project.id, scene.id, ollamaEndpoint, runtimeConfig?.ollamaModel || 'local', scene.prompt); setPromptSuggestion(result.developed_prompt); setPromptAssistantMessage(result.message) }
+    catch (error) { setPromptAssistantMessage(error instanceof Error ? error.message : 'Next-scene development failed.') }
+    finally { setPromptAssistantBusy(false) }
+  }
+  const suggestNextScene = async () => {
+    if (!project || !scene || promptAssistantBusy) return
+    setPromptAssistantBusy(true); setPromptAssistantMessage('Suggesting next actions…')
+    try { const result = await suggestH3NextScene(project.id, scene.id); setPromptSuggestion(result.options.join('\n')); setPromptAssistantMessage('Choose an action, then use Develop Next Scene.') }
+    catch (error) { setPromptAssistantMessage(error instanceof Error ? error.message : 'Suggestions are unavailable.') }
+    finally { setPromptAssistantBusy(false) }
+  }
+
   // Legacy callbacks remain available while the old JSX below is retained as a
   // commented migration reference. The extracted sidebar is the only rendered surface.
   void [Clapperboard, ChevronLeft, ChevronRight, Loader2, RotateCcw, Sparkles, Square, h3AudioSummary, H3_WORKFLOW_PROFILES, LTX_2_5_OFFICIAL_MODEL_PAGE, updateH3Project, installH3WorkflowProfile, H3ThemedSelect, runtimeError, ollamaLifecycle, sequenceStarting, workspaceError, fileActionMessage, ltx25Models, ltx25Importing, upscaling, promptAssistantMessage, promptSuggestion, clock, profileAspectRatios, profileResolutionMegapixels, viewedRun, importLtx25Models, upscaleActiveVersion, saveRuntimeSettings, startManagedRuntime, applyContinuePrevious, startSequence, stopSequence, miniMaxH3, miniMaxH3ModeOptions, phaseActive, activeVersionIndex, finalPrompt, selectVersionAt, updateDuration, updateAspectRatio, updateResolution]
@@ -686,6 +703,8 @@ export function Home() {
         onProfileChange={changeSceneProfile}
         onChooseReference={() => void chooseReferenceImage()}
         onImprovePrompt={() => void improvePrompt()}
+        onDevelopNextScene={() => void developNextScene()}
+        onSuggestNextScene={() => void suggestNextScene()}
         onPrepareContinuity={() => void prepareContinuity()}
         onRender={() => void renderScene()}
         onSelectVersion={id => { setSelectedUpscaleVariantId(null); if (project && scene) void updateH3Scene(project.id, scene.id, { selected_render_version_id: id }).then(replaceProject) }}

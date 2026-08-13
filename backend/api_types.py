@@ -350,9 +350,24 @@ class H3RenderRun(BaseModel):
     items: list[H3SequenceItem]
 
 
+class H3ContinuityMemoryEntry(BaseModel):
+    """Compact confirmed history; never records an unrendered prompt draft as fact."""
+    model_config = ConfigDict(strict=True)
+    scene_id: str
+    render_version_id: str
+    summary: str = Field(min_length=1, max_length=1200)
+    current_state: str = Field(min_length=1, max_length=600)
+    audio_summary: str = Field(default="", max_length=600)
+
+
+class H3ContinuityMemory(BaseModel):
+    model_config = ConfigDict(strict=True)
+    entries: list[H3ContinuityMemoryEntry] = Field(default_factory=list)
+
+
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[15]
+    schema_version: Literal[16]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str
@@ -365,6 +380,7 @@ class H3Project(BaseModel):
     scenes: list[H3Scene]
     selected_scene_id: str
     render_runs: list[H3RenderRun]
+    continuity_memory: H3ContinuityMemory = Field(default_factory=H3ContinuityMemory)
 
 
 class H3ProjectCreateRequest(BaseModel):
@@ -489,6 +505,32 @@ class H3PromptAssistantResponse(BaseModel):
     model: str
     vision_context: Literal["used", "not_available"]
     message: str
+
+
+class H3NextScenePromptRequest(BaseModel):
+    model_config = ConfigDict(strict=True)
+    endpoint: str = "http://127.0.0.1:11434"
+    model: str = Field(min_length=1, max_length=300)
+    current_user_instruction: str = Field(min_length=1, max_length=12000)
+
+
+class H3NextScenePromptResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+    provider: Literal["ollama", "deterministic_local"]
+    developed_prompt: str
+    updated_continuity_summary: str
+    next_scene_summary: str
+    source_scene_id: str
+    source_render_version_id: str
+    continuity_artifact_id: str | None = None
+    message: str
+
+
+class H3NextSceneSuggestionsResponse(BaseModel):
+    model_config = ConfigDict(strict=True)
+    options: list[str] = Field(min_length=3, max_length=3)
+    source_scene_id: str
+    source_render_version_id: str
 
 
 class H3WorkflowProfileInstallRequest(BaseModel):

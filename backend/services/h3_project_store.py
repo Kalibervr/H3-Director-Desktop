@@ -15,6 +15,8 @@ from api_types import (
     H3Project,
     H3ProjectSettings,
     H3ContinuityArtifact,
+    H3ContinuityMemory,
+    H3ContinuityMemoryEntry,
     H3RenderRun,
     H3RenderVersion,
     H3UpscaleVariant,
@@ -144,7 +146,7 @@ class H3ProjectStore:
         if sequence_mode == "continuous_sequence":
             scenes = [scene.model_copy(update={"mode": "new_shot" if scene.order == 1 else "continue_previous"}) for scene in scenes]
         project = H3Project(
-            schema_version=15,
+            schema_version=16,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
@@ -157,6 +159,7 @@ class H3ProjectStore:
             scenes=scenes,
             selected_scene_id=scenes[0].id,
             render_runs=[],
+            continuity_memory=H3ContinuityMemory(),
         )
         self.save_project(project)
         return project
@@ -382,7 +385,12 @@ class H3ProjectStore:
             }))
         if not found:
             raise ProjectStoreError("The selected scene could not be found.")
-        return self.save_project(project.model_copy(update={"scenes": scenes, "selected_scene_id": scene_id}))
+        completed_scene = next(item for item in scenes if item.id == scene_id)
+        prompt = version.final_submitted_prompt or version.final_prompt or version.prompt
+        compact = re.sub(r"\s+", " ", prompt).strip()[:1200]
+        entry = H3ContinuityMemoryEntry(scene_id=scene_id, render_version_id=version.id, summary=compact, current_state=compact[:600], audio_summary=completed_scene.custom_audio_instruction)
+        memory = project.continuity_memory.model_copy(update={"entries": [*project.continuity_memory.entries, entry]})
+        return self.save_project(project.model_copy(update={"scenes": scenes, "selected_scene_id": scene_id, "continuity_memory": memory}))
 
     def add_upscale_variant(self, project_id: str, scene_id: str, source_version_id: str, variant: H3UpscaleVariant) -> H3Project:
         """Persist a derived render beside its immutable source version atomically."""
@@ -581,12 +589,13 @@ class H3ProjectStore:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             original_schema = payload.get("schema_version")
-            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
+            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
             if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
             if migrated:
-                payload["schema_version"] = 15
+                payload["schema_version"] = 16
+                payload.setdefault("continuity_memory", {"entries": []})
                 payload.setdefault("sequence_mode", "independent_shots")
                 payload.setdefault("workflow_profile_id", "minimax_h3_image_to_video")
                 payload.setdefault("workflow_mode", "image_to_video")
