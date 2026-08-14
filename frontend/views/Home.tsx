@@ -511,9 +511,7 @@ export function Home() {
     setWorkspaceError(null)
     try {
       await flushPendingSave()
-      const response = (promptOnly || ltxTextToVideo)
-        ? await continueH3FromPrevious(project.id, scene.id)
-        : await prepareH3Continuity(project.id, scene.id)
+      const response = await continueH3FromPrevious(project.id, scene.id)
       replaceProject(response.project)
       setSaveState('saved')
     } catch (error) {
@@ -522,6 +520,18 @@ export function Home() {
     } finally {
       setPreparingContinuity(false)
     }
+  }
+
+  const updateContinuityPreview = async (patch: Pick<H3Scene, 'continuity_strategy' | 'continuity_offset_frames'>) => {
+    if (!project || !scene) return
+    setPreparingContinuity(true)
+    try {
+      const saved = await updateH3Scene(project.id, scene.id, patch)
+      replaceProject(saved)
+      replaceProject((await prepareH3Continuity(project.id, scene.id)).project)
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : 'The selected continuity frame could not be prepared.')
+    } finally { setPreparingContinuity(false) }
   }
 
 
@@ -573,6 +583,7 @@ export function Home() {
   useEffect(() => () => previewVideoRef.current?.pause(), [])
   const sourceScene = scene && project ? [...project.scenes].sort((a, b) => a.order - b.order)[scene.order - 2] ?? null : null
   const sourceVersion = sourceScene?.render_versions.find(item => item.id === sourceScene.selected_render_version_id) ?? null
+  const continuationLabel = sourceScene?.workflow_profile_id === 'minimax_h3_no_reference' ? 'MiniMax H3 · Image to Video' : sourceScene?.workflow_profile_id === 'ltx_2_5_text_to_video' ? 'LTX 2.5 · Image to Video' : sourceScene ? `${sourceScene.workflow_profile_id.startsWith('ltx_2_5_') ? 'LTX 2.5' : 'MiniMax H3'} · Image to Video` : null
   const selectedContinuityArtifact = scene?.continuity_artifacts.find(item => item.id === scene.selected_continuity_artifact_id) ?? null
   const continuityArtifact = selectedContinuityArtifact
     && selectedContinuityArtifact.source_scene_id === sourceScene?.id
@@ -714,7 +725,7 @@ export function Home() {
       <main className="min-h-0 min-w-0 bg-[radial-gradient(circle_at_50%_20%,rgba(245,158,11,.07),transparent_36%)] p-6">
         <header className="mb-5 flex items-center justify-between"><div>
           <div className="text-xs uppercase tracking-[0.2em] text-zinc-600">Current production · {saveState}</div>
-          <input value={project?.name ?? ''} disabled={!project} onChange={event => project && setProject({ ...project, name: event.target.value })} onBlur={() => project?.name.trim() && void renameH3Project(project.id, project.name).then(replaceProject).catch(() => setSaveState('error'))} className="mt-1 w-96 bg-transparent text-xl font-semibold outline-none disabled:opacity-50" placeholder="No project selected" />
+          <input value={project?.name ?? ''} title={project?.name ?? ''} disabled={!project} onChange={event => project && setProject({ ...project, name: event.target.value })} onBlur={() => project?.name.trim() && void renameH3Project(project.id, project.name).then(replaceProject).catch(() => setSaveState('error'))} className="mt-1 w-full max-w-[min(42vw,42rem)] bg-transparent text-xl font-semibold outline-none disabled:opacity-50" placeholder="No project selected" />
         </div><div className="flex items-center gap-3"><button onClick={() => setShowWorkflowCenter(true)} className="rounded-lg border border-indigo-300/25 px-3 py-2 text-xs font-medium text-indigo-100">Models &amp; Workflows</button><button onClick={() => void openProjectFolder()} disabled={!project} className="rounded-lg border border-white/10 px-3 py-2 text-xs font-medium text-zinc-300 disabled:opacity-30"><Folder className="mr-2 inline h-3.5 w-3.5" />Open Project Folder</button><button onClick={() => openInEditor(false)} disabled={!project || !project.scenes.some(item => item.selected_render_version_id)} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-medium text-zinc-300 disabled:opacity-30"><Film className="mr-2 inline h-3.5 w-3.5" />Open in Editor</button>{editorUpdates.length > 0 && <button onClick={() => openInEditor(true)} className="rounded-lg border border-amber-300/30 px-3 py-2 text-xs text-amber-200">Update {editorUpdates.length} selected version{editorUpdates.length === 1 ? '' : 's'}</button>}<div className="text-right"><StatusPill status={runtimeStatus} />{runtimeVersion && <div className="mt-1 text-[10px] text-zinc-600">ComfyUI {runtimeVersion}</div>}</div></div></header>
         <section className="relative flex h-[calc(100%-64px)] min-h-[360px] items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl">
           {previewUrl ? activeVersion ? <video ref={previewVideoRef} key={previewUrl} src={previewUrl} controls preload="metadata" className="h-full w-full object-contain" /> : <img src={previewUrl} alt="Selected scene reference" className="h-full w-full object-contain opacity-90" /> : <div className="max-w-sm text-center"><Film className="mx-auto h-10 w-10 text-zinc-700" /><h2 className="mt-5 text-lg text-zinc-300">Your selected render will appear here</h2><p className="mt-2 text-sm text-zinc-600">{promptOnly ? 'Add a prompt to begin.' : 'Create a project and save the scene reference to begin.'}</p></div>}
@@ -742,7 +753,8 @@ export function Home() {
         onImprovePrompt={() => void improvePrompt()}
         onDevelopNextScene={() => void developNextScene()}
         onSuggestNextScene={() => void suggestNextScene()}
-        onPrepareContinuity={() => void prepareContinuity()}
+        onContinuePrevious={() => void prepareContinuity()}
+        onContinuityPatch={patch => void updateContinuityPreview(patch)}
         onRender={() => void renderScene()}
         onSelectVersion={id => { setSelectedUpscaleVariantId(null); if (project && scene) void updateH3Scene(project.id, scene.id, { selected_render_version_id: id }).then(replaceProject) }}
         onSaveCopy={() => void saveRenderCopy()}
@@ -755,6 +767,7 @@ export function Home() {
         onKeepPromptAssistantReadyChange={value => { if (runtimeConfig) setRuntimeConfig({ ...runtimeConfig, ollamaKeepWarm: value }) }}
         ollamaStatus={compactOllamaStatus}
         ltxReadiness={ltxReadiness}
+        continuationLabel={continuationLabel}
         promptAssistant={promptAssistant}
         onCancelPromptAssistant={() => { activePromptAssistantRequest.current = null; setPromptAssistant(current => ({ ...current, status: 'cancelled', message: 'The request was cancelled. Any late local response is ignored.' })) }}
         onDismissPromptAssistant={() => setPromptAssistant({ status: 'idle' })}
