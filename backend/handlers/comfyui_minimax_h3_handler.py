@@ -320,6 +320,42 @@ class ComfyUIMiniMaxH3Handler:
         return current_state[:600], historical[:1200]
 
     @staticmethod
+    def _develop_current_location(instruction: str, current_state: str) -> str:
+        """Use the new user direction for place changes, never the old environment."""
+        value = instruction.lower()
+        locations = (
+            (("elevator", "lift"), "interior elevator"),
+            (("apartment entrance", "entrance", "doorway", "threshold"), "apartment entrance"),
+            (("apartment", "flat"), "apartment interior"),
+            (("hallway", "corridor"), "interior hallway"),
+            (("lobby",), "building lobby"),
+            (("street", "sidewalk", "pavement"), "city street"),
+        )
+        for terms, location in locations:
+            if any(term in value for term in terms):
+                return location
+        return ComfyUIMiniMaxH3Handler._continuity_location(current_state)[:600]
+
+    @staticmethod
+    def _develop_audio_state(historical: str, current_location: str, target: H3Scene) -> str:
+        if target.audio_mode == "silent":
+            return "Silence is required for this scene."
+        prior_rain = any(token in historical.lower() for token in ("rain", "street", "puddle", "sidewalk"))
+        if current_location == "interior elevator":
+            state = "Interior elevator ambience: restrained mechanical hum and room tone. Exterior rain is not the current ambience."
+        elif current_location == "apartment entrance" and prior_rain:
+            state = "At the apartment entrance, transition street rain to muffled exterior ambience; do not describe the street as the current environment."
+        elif current_location.startswith("interior") and prior_rain:
+            state = "Interior ambience; exterior rain is muffled or absent, not the current environment."
+        else:
+            state = "Natural ambience appropriate to the current location."
+        if target.no_speech:
+            state += " No speech remains authoritative."
+        if target.no_music:
+            state += " No music remains authoritative."
+        return state
+
+    @staticmethod
     def _parsed_suggestion_options(raw: str) -> list[str]:
         lines = [re.sub(r"^\s*(?:\d+[.)]|[-*])\s*", "", line).strip() for line in raw.splitlines()]
         return [line for line in lines if line and "no speech" not in line.lower() and "no music" not in line.lower()]
@@ -413,12 +449,16 @@ class ComfyUIMiniMaxH3Handler:
     def develop_next_scene(self, project_id: str, scene_id: str, request: H3NextScenePromptRequest) -> H3NextScenePromptResponse:
         project = self._project_store.get_project(project_id); target, source, version = self._next_scene_source(project, scene_id)
         current_state, historical = self._confirmed_continuity_context(project, source, version)
-        continuity = f"CURRENT STATE (authoritative): {current_state}\nHISTORICAL CONTEXT (do not replay): {historical}"
-        context = H3PromptAssistantRequest(endpoint=request.endpoint, model=request.model, raw_prompt=request.current_user_instruction, scene_number=target.order, scene_name=target.name, scene_mode="continue_previous", duration_seconds=target.duration_seconds, aspect_ratio=target.aspect_ratio, width=target.width, height=target.height, fps=target.fps, project_name=project.name, sequence_mode=project.sequence_mode, previous_scene_number=source.order, previous_scene_name=source.name, previous_scene_prompt=continuity, previous_final_prompt=version.final_submitted_prompt or version.final_prompt, continuity_source_version_id=version.id, audio_mode=target.audio_mode, no_speech=target.no_speech, no_music=target.no_music, custom_audio_instruction=target.custom_audio_instruction)
+        next_action = request.current_user_instruction.strip()
+        current_location = self._develop_current_location(next_action, current_state)
+        persistent_visual_style = "Same subject; cinematic realism; preserve compatible lighting and color mood."
+        audio_state = self._develop_audio_state(historical, current_location, target)
+        context = H3PromptAssistantRequest(endpoint=request.endpoint, model=request.model, raw_prompt=next_action, scene_number=target.order, scene_name=target.name, scene_mode="continue_previous", duration_seconds=target.duration_seconds, aspect_ratio=target.aspect_ratio, width=target.width, height=target.height, fps=target.fps, project_name=project.name, sequence_mode=project.sequence_mode, previous_scene_number=source.order, previous_scene_name=source.name, previous_scene_prompt=historical, previous_final_prompt=version.final_submitted_prompt or version.final_prompt, continuity_source_version_id=version.id, current_location=current_location, current_state=current_state, next_action=next_action, persistent_visual_style=persistent_visual_style, audio_state=audio_state, audio_mode=target.audio_mode, no_speech=target.no_speech, no_music=target.no_music, custom_audio_instruction=target.custom_audio_instruction)
         try:
             ollama_result = OllamaPromptAssistant().improve(context); developed = ollama_result.suggestion; elapsed_seconds = ollama_result.elapsed_seconds; provider = "ollama"
         except (OllamaPromptAssistantError, ValueError):
-            developed = f"Continue directly from the supplied frame of the previous scene. {request.current_user_instruction.strip()} Preserve only known subject, location, atmosphere, and audio continuity; advance the action without replaying the prior scene."; elapsed_seconds = 0.0; provider = "deterministic_local"
+            draft = f"{current_location}. {next_action} {persistent_visual_style} {audio_state} Treat prior environment only as historical mood; do not describe it as the current location or replay prior action."
+            developed = compose_h3_prompt(draft, H3AudioGuidance(mode=target.audio_mode, no_speech=target.no_speech, no_music=target.no_music, custom_instruction=target.custom_audio_instruction)); elapsed_seconds = 0.0; provider = "deterministic_local"
         artifact = target.selected_continuity_artifact_id
         message = "Review before applying; this draft is not confirmed continuity." if provider == "ollama" else "Local Ollama was unavailable; a deterministic local draft is ready for review."
         return H3NextScenePromptResponse(provider=provider, developed_prompt=developed, updated_continuity_summary=request.current_user_instruction.strip(), next_scene_summary=request.current_user_instruction.strip(), source_scene_id=source.id, source_render_version_id=version.id, continuity_artifact_id=artifact, message=message, request_id=request.request_id, elapsed_seconds=elapsed_seconds)

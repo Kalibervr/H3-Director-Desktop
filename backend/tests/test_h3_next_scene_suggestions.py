@@ -10,7 +10,7 @@ import pytest
 from api_types import H3ContinuityArtifact, H3NextScenePromptRequest, H3RenderVersion, H3SceneUpdateRequest, H3SequenceStartRequest, MiniMaxH3VideoProbeResponse
 from handlers.comfyui_minimax_h3_handler import ComfyUIMiniMaxH3Handler
 from _routes._errors import HTTPError
-from services.h3_ollama_prompt_assistant import OllamaSuggestion, OllamaPromptAssistant
+from services.h3_ollama_prompt_assistant import OllamaPromptAssistantError, OllamaSuggestion, OllamaPromptAssistant
 from services.h3_project_store import H3ProjectStore
 
 
@@ -119,6 +119,54 @@ def test_confirmed_outcome_is_not_reused_for_a_different_selected_version(tmp_pa
     assert target.id == scene_id
     assert state == "A different take ends in a lobby."
     assert historical == "A different take ends in a lobby."
+
+
+def test_develop_next_scene_current_location_overrides_historical_street_and_preserves_style(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    handler, project_id, scene_id = _handler(tmp_path)
+    observed: list[object] = []
+    monkeypatch.setattr(OllamaPromptAssistant, "improve", lambda _self, request: observed.append(request) or _result("A usable elevator prompt."))
+
+    response = handler.develop_next_scene(project_id, scene_id, _request("Inside an elevator, she presses the button for her floor."))
+
+    assert response.provider == "ollama"
+    context = observed[0]
+    assert context.current_location == "interior elevator"
+    assert context.next_action == "Inside an elevator, she presses the button for her floor."
+    assert context.previous_scene_prompt == "Rainy street walk."
+    assert "cinematic realism" in context.persistent_visual_style.lower()
+    assert "mechanical hum" in context.audio_state.lower()
+    instruction = OllamaPromptAssistant._instruction(context)
+    assert "CURRENT LOCATION (authoritative): interior elevator" in instruction
+    assert "Historical environment may influence only mood or style" in instruction
+    assert "Historical context from scene 1" in instruction
+
+
+def test_develop_next_scene_transitions_street_audio_at_apartment_entrance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    handler, project_id, scene_id = _handler(tmp_path)
+    observed: list[object] = []
+    monkeypatch.setattr(OllamaPromptAssistant, "improve", lambda _self, request: observed.append(request) or _result("A usable entrance prompt."))
+
+    handler.develop_next_scene(project_id, scene_id, _request("She reaches the apartment entrance and opens the door."))
+
+    context = observed[0]
+    assert context.current_location == "apartment entrance"
+    assert "muffled exterior ambience" in context.audio_state.lower()
+    assert "street" not in context.current_location.lower()
+
+
+def test_develop_next_scene_fallback_preserves_no_speech_and_no_music(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    handler, project_id, scene_id = _handler(tmp_path)
+    handler._project_store.update_scene(project_id, scene_id, H3SceneUpdateRequest(no_speech=True, no_music=True))
+    monkeypatch.setattr(OllamaPromptAssistant, "improve", lambda *_args: (_ for _ in ()).throw(OllamaPromptAssistantError("offline")))
+
+    response = handler.develop_next_scene(project_id, scene_id, _request("Inside the elevator, she presses the button for her floor."))
+
+    assert response.provider == "deterministic_local"
+    lower = response.developed_prompt.lower()
+    assert "interior elevator" in lower
+    assert "rain-soaked city street" not in lower
+    assert "no speech, no dialogue, no voices, no vocalizations" in lower
+    assert "no music, no soundtrack, no background score, no singing, no musical elements" in lower
 
 
 def test_sequence_preflight_uses_continuation_target_profile_not_project_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

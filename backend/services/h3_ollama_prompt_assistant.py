@@ -138,11 +138,22 @@ class OllamaPromptAssistant:
 
     @staticmethod
     def _instruction(request: H3PromptAssistantRequest) -> str:
+        continuity = ""
+        if any((request.current_location, request.current_state, request.next_action, request.persistent_visual_style, request.audio_state)):
+            continuity = (
+                " CONTINUATION CONTRACT:"
+                f" CURRENT LOCATION (authoritative): {request.current_location or 'not supplied'}."
+                f" CURRENT STATE: {request.current_state or 'not supplied'}."
+                f" NEXT ACTION (highest priority): {request.next_action or request.raw_prompt}."
+                f" PERSISTENT VISUAL STYLE: {request.persistent_visual_style or 'preserve only what is supplied'}."
+                f" AUDIO STATE: {request.audio_state or 'follow the selected audio guidance'}."
+                " The current location overrides historical environment text. Historical environment may influence only mood or style; never describe it as the current physical location. Do not replay prior actions."
+            )
         previous = ""
         if request.previous_scene_prompt:
-            previous = f" Previous scene {request.previous_scene_number or '?'} ({request.previous_scene_name or 'scene'}): {request.previous_scene_prompt}"
+            previous = f" Historical context from scene {request.previous_scene_number or '?'} ({request.previous_scene_name or 'scene'}; secondary, do not replay): {request.previous_scene_prompt}"
             if request.previous_final_prompt:
-                previous += f" Previous final H3 prompt: {request.previous_final_prompt}"
+                previous += f" Historical final H3 prompt (style and continuity only): {request.previous_final_prompt}"
             if request.continuity_source_version_id:
                 previous += f" Continuity source version: {request.continuity_source_version_id}."
         return (
@@ -152,7 +163,7 @@ class OllamaPromptAssistant:
             "For continuation scenes preserve established continuity unless the user explicitly changes it. "
             f"Project: {request.project_name}; sequence: {request.sequence_mode}. Current scene {request.scene_number} ({request.scene_name}), "
             f"mode {request.scene_mode}, {request.aspect_ratio}, {request.width}x{request.height}, {request.fps} FPS, {request.duration_seconds:g}s. "
-            f"Raw prompt: {request.raw_prompt}.{previous}"
+            f"Raw prompt: {request.raw_prompt}.{continuity}{previous}"
         )
 
     @staticmethod

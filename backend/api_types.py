@@ -500,6 +500,11 @@ class H3PromptAssistantRequest(BaseModel):
     previous_scene_prompt: str | None = Field(default=None, max_length=12000)
     previous_final_prompt: str | None = Field(default=None, max_length=12000)
     continuity_source_version_id: str | None = Field(default=None, max_length=120)
+    current_location: str | None = Field(default=None, max_length=600)
+    current_state: str | None = Field(default=None, max_length=1200)
+    next_action: str | None = Field(default=None, max_length=12000)
+    persistent_visual_style: str | None = Field(default=None, max_length=600)
+    audio_state: str | None = Field(default=None, max_length=600)
     continuity_frame_path: str | None = Field(default=None, max_length=4096)
     reference_image_path: str | None = Field(default=None, max_length=4096)
     audio_mode: Literal["natural_ambience", "dialogue", "silent"]
