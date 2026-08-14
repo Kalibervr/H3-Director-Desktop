@@ -17,7 +17,8 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-RenderScene = Callable[[str, str, H3ProjectRenderRequest, Callable[[str, int | None, int | None, str | None], None], Callable[[], bool]], object]
+RenderProgress = Callable[..., None]
+RenderScene = Callable[[str, str, H3ProjectRenderRequest, RenderProgress, Callable[[], bool]], object]
 
 
 def resolve_sequence_scenes(project: H3Project, *, kind: str, start_scene_id: str | None) -> list[H3Scene]:
@@ -75,7 +76,12 @@ class H3SequenceCoordinator:
             items=[H3SequenceItem(scene_id=scene.id, scene_order=scene.order, state="waiting") for scene in ordered],
         )
         with self._lock:
-            self._store.add_render_run(project_id, run)
+            self._store.claim_active_run(project_id, run_id)
+            try:
+                self._store.add_render_run(project_id, run)
+            except Exception:
+                self._store.release_active_run(project_id, run_id)
+                raise
             thread = threading.Thread(
                 target=self._execute,
                 args=(project_id, run_id, request),
@@ -112,9 +118,7 @@ class H3SequenceCoordinator:
                         project_id,
                         scene_id,
                         request,
-                        lambda phase, value, maximum, diagnostics, sid=scene_id: self._phase(
-                            project_id, run_id, sid, phase, value, maximum, diagnostics
-                        ),
+                        lambda phase, *values, sid=scene_id: self._report_phase(project_id, run_id, sid, phase, *values),
                         lambda: key in self._cancel_requests,
                     )
                     project = self._store.get_project(project_id)
@@ -152,10 +156,28 @@ class H3SequenceCoordinator:
                 self._stop_requests.discard(key)
                 self._cancel_requests.discard(key)
                 self._threads.pop(key, None)
+                self._store.release_active_run(project_id, run_id)
+
+    def _report_phase(self, project_id: str, run_id: str, scene_id: str, phase: str, *values: object) -> None:
+        """Accept legacy four-field progress and provider progress with a prompt ID."""
+        if len(values) == 3:
+            prompt_id = None
+            value, maximum, diagnostics = values
+        elif len(values) == 4:
+            prompt_id, value, maximum, diagnostics = values
+        else:
+            raise TypeError("Sequence progress must include phase plus three or four values.")
+        self._phase(
+            project_id, run_id, scene_id, phase,
+            prompt_id if isinstance(prompt_id, str) else None,
+            value if isinstance(value, int) else None,
+            maximum if isinstance(maximum, int) else None,
+            diagnostics if isinstance(diagnostics, str) else None,
+        )
 
     def _phase(
         self, project_id: str, run_id: str, scene_id: str, phase: str,
-        value: int | None, maximum: int | None, diagnostics: str | None,
+        prompt_id: str | None, value: int | None, maximum: int | None, diagnostics: str | None,
     ) -> None:
         state = {
             "Preparing": "preparing", "Submitted": "rendering",
@@ -165,7 +187,7 @@ class H3SequenceCoordinator:
         if state:
             self._set_item(
                 project_id, run_id, scene_id, state, current_phase=phase,
-                progress_value=value, progress_max=maximum, diagnostics=diagnostics,
+                prompt_id=prompt_id, progress_value=value, progress_max=maximum, diagnostics=diagnostics,
             )
 
     def _set_item(self, project_id: str, run_id: str, scene_id: str, state: str, **changes: object) -> None:

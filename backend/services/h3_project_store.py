@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -74,7 +75,12 @@ def _atomic_json_write(path: Path, payload: object) -> None:
 class H3ProjectStore:
     def __init__(self, projects_root: Path) -> None:
         self.projects_root = projects_root.resolve()
-        self._recover_interrupted_runs = True
+        # A run belongs to a coordinator only for the lifetime of this backend
+        # process.  Persisted runs without that in-memory ownership are safe to
+        # examine on reopen; this deliberately does not confuse a UI remount
+        # with a still-live backend render.
+        self._active_run_keys: set[tuple[str, str]] = set()
+        self._active_run_lock = threading.RLock()
 
     def list_projects(self) -> list[H3Project]:
         if not self.projects_root.exists():
@@ -94,7 +100,6 @@ class H3ProjectStore:
                 projects.append(self._read_file(metadata))
             except ProjectStoreError:
                 continue
-        self._recover_interrupted_runs = False
         return sorted(projects, key=lambda item: item.updated_at, reverse=True)
 
     def create_project(self, name: str, scene_count: int = 1, sequence_mode: str = "independent_shots", workflow_profile_id: str = "minimax_h3_image_to_video", workflow_mode: str = "image_to_video") -> H3Project:
@@ -169,6 +174,19 @@ class H3ProjectStore:
             if project.id == project_id:
                 return project
         raise ProjectStoreError("The local project could not be found.")
+
+    def claim_active_run(self, project_id: str, run_id: str) -> None:
+        """Record coordinator ownership before a persisted run can be reopened."""
+        with self._active_run_lock:
+            self._active_run_keys.add((project_id, run_id))
+
+    def release_active_run(self, project_id: str, run_id: str) -> None:
+        with self._active_run_lock:
+            self._active_run_keys.discard((project_id, run_id))
+
+    def _run_is_active_here(self, project_id: str, run_id: str) -> bool:
+        with self._active_run_lock:
+            return (project_id, run_id) in self._active_run_keys
 
     def reopen_project(self, project_root: Path) -> H3Project:
         resolved = project_root.resolve()
@@ -692,22 +710,38 @@ class H3ProjectStore:
             raise ProjectStoreError("The local project metadata has an invalid project root.")
         interrupted = False
         recovered_runs: list[H3RenderRun] = []
+        recovered_scene_ids: set[str] = set()
         for run in project.render_runs:
-            if run.status != "running" or not self._recover_interrupted_runs:
+            active_items = [item for item in run.items if item.state in {"waiting", "preparing", "rendering", "verifying"}]
+            # Never infer that a submitted ComfyUI prompt has disappeared just
+            # because this UI/backend instance was reopened.  A prompt ID must
+            # be correlated with ComfyUI history/queue by the live provider.
+            # Conversely, an unowned active item without a prompt ID cannot be
+            # adopted into a render version and is safe to mark interrupted.
+            recover_pre_submission = (
+                run.status == "running"
+                and bool(active_items)
+                and not self._run_is_active_here(project.id, run.id)
+                and all(item.prompt_id is None for item in active_items)
+            )
+            if not recover_pre_submission:
                 recovered_runs.append(run)
                 continue
             interrupted = True
             timestamp = _now()
+            reason = "The render was interrupted before ComfyUI returned a prompt ID."
             items = [item.model_copy(update={
                 "state": "cancelled" if item.state in {"waiting", "preparing", "rendering", "verifying"} else item.state,
                 "completed_at": timestamp if item.state in {"waiting", "preparing", "rendering", "verifying"} else item.completed_at,
-                "error": "Not resumed after backend restart." if item.state in {"waiting", "preparing", "rendering", "verifying"} else item.error,
+                "error": reason if item.state in {"waiting", "preparing", "rendering", "verifying"} else item.error,
             }) for item in run.items]
+            recovered_scene_ids.update(item.scene_id for item in active_items)
             recovered_runs.append(run.model_copy(update={
                 "status": "cancelled",
                 "completed_at": timestamp,
                 "current_scene_id": None,
-                "failure_or_cancel_reason": "The backend restarted; the in-flight queue was not resumed.",
+                "stop_after_current_requested": True,
+                "failure_or_cancel_reason": reason,
                 "items": items,
             }))
         if interrupted:
@@ -718,7 +752,20 @@ class H3ProjectStore:
             versions = [self._hydrate_render_timing(version) for version in scene.render_versions]
             timing_hydrated = timing_hydrated or any(before != after for before, after in zip(scene.render_versions, versions, strict=True))
             hydrated_scenes.append(scene.model_copy(update={"render_versions": versions}))
-        if timing_hydrated:
+        if interrupted:
+            hydrated_scenes = [
+                scene.model_copy(update={
+                    "status": "cancelled",
+                    "active_prompt_id": None,
+                    "last_error": None,
+                    "current_phase": "Interrupted",
+                    "progress_value": None,
+                    "progress_max": None,
+                    "diagnostics": None,
+                }) if scene.id in recovered_scene_ids and scene.status in {"queued", "preparing", "submitted", "rendering", "encoding", "verifying"} else scene
+                for scene in hydrated_scenes
+            ]
+        if timing_hydrated or interrupted:
             project = project.model_copy(update={"scenes": hydrated_scenes})
         if migrated or normalized_continuation_profiles or interrupted or timing_hydrated:
             _atomic_json_write(path, project.model_dump(mode="json"))

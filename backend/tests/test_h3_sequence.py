@@ -158,6 +158,32 @@ def test_single_scene_stop_interrupts_current_render_without_version(tmp_path: P
     assert refreshed.render_versions == []
 
 
+def test_single_scene_stop_after_submission_preserves_prompt_correlation(tmp_path: Path) -> None:
+    store = H3ProjectStore(tmp_path / "Projects")
+    project = store.create_project("Submitted cancellation")
+    entered = threading.Event()
+
+    def render(project_id, scene_id, request, report, cancel_requested):
+        del project_id, scene_id, request
+        report("Submitted", "prompt-submitted", None, None, None)
+        entered.set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if cancel_requested():
+                raise RenderCancelled("The render was cancelled by the user.")
+            time.sleep(0.01)
+        raise AssertionError("render cancellation was not requested")
+
+    coordinator = H3SequenceCoordinator(store, render)
+    run = coordinator.start(project.id, H3ProjectRenderRequest(), kind="scene", start_scene_id=project.scenes[0].id)
+    assert entered.wait(1)
+    coordinator.request_stop(project.id, run.id)
+    cancelled = _wait(store, project.id, run.id)
+    assert cancelled.status == "cancelled"
+    assert cancelled.items[0].prompt_id == "prompt-submitted"
+    assert store.get_project(project.id).scenes[0].render_versions == []
+
+
 def test_active_queue_blocks_reorder_and_restart_marks_it_cancelled(tmp_path: Path) -> None:
     root = tmp_path / "Projects"
     store = H3ProjectStore(root)
@@ -167,10 +193,12 @@ def test_active_queue_blocks_reorder_and_restart_marks_it_cancelled(tmp_path: Pa
         ordered_scene_ids=[scene.id for scene in project.scenes], current_scene_id=project.scenes[0].id,
         items=[H3SequenceItem(scene_id=scene.id, scene_order=scene.order, state="rendering" if scene.order == 1 else "waiting") for scene in project.scenes],
     )
+    store.claim_active_run(project.id, run.id)
     store.add_render_run(project.id, run)
     with pytest.raises(ProjectStoreError, match="order cannot change"):
         store.reorder_scenes(project.id, list(reversed(run.ordered_scene_ids)))
+    store.release_active_run(project.id, run.id)
     reopened = H3ProjectStore(root).get_project(project.id)
     recovered = next(item for item in reopened.render_runs if item.id == run.id)
     assert recovered.status == "cancelled"
-    assert "not resumed" in (recovered.failure_or_cancel_reason or "")
+    assert "before ComfyUI returned a prompt ID" in (recovered.failure_or_cancel_reason or "")

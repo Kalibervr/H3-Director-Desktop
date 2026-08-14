@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from api_types import H3RenderVersion, H3SceneUpdateRequest, MiniMaxH3VideoProbeResponse
+from api_types import H3RenderRun, H3RenderVersion, H3SceneUpdateRequest, H3SequenceItem, MiniMaxH3VideoProbeResponse
 from services.h3_project_store import H3ProjectStore, ProjectStoreError
 
 
@@ -237,6 +237,77 @@ def test_project_writes_leave_no_temporary_files_and_reject_outside_reopen(tmp_p
     assert payload["name"] == "Atomic Save"
     with pytest.raises(ProjectStoreError, match="app-owned"):
         store.reopen_project(tmp_path / "outside")
+
+
+def _running_run(project_id: str, scene_id: str, *, prompt_id: str | None = None) -> H3RenderRun:
+    return H3RenderRun(
+        id="run-stale", kind="scene", status="running", started_at="2026-08-14T00:00:00+00:00",
+        ordered_scene_ids=[scene_id], current_scene_id=scene_id,
+        items=[H3SequenceItem(
+            scene_id=scene_id, scene_order=1, state="rendering", started_at="2026-08-14T00:00:01+00:00",
+            prompt_id=prompt_id, current_phase="Sampling",
+        )],
+    )
+
+
+def test_reopen_recovers_unowned_pre_submission_run_without_creating_version(tmp_path: Path) -> None:
+    root = tmp_path / "Projects"
+    store = H3ProjectStore(root)
+    project = store.create_project("Interrupted")
+    scene = project.scenes[0]
+    store.set_scene_status(project.id, scene.id, "rendering", phase="Sampling", progress_value=1, progress_max=20)
+    store.add_render_run(project.id, _running_run(project.id, scene.id))
+
+    reopened = H3ProjectStore(root).get_project(project.id)
+    run = reopened.render_runs[0]
+    assert run.status == "cancelled"
+    assert run.items[0].state == "cancelled"
+    assert run.items[0].prompt_id is None
+    assert "before ComfyUI returned a prompt ID" in (run.failure_or_cancel_reason or "")
+    assert reopened.scenes[0].status == "cancelled"
+    assert reopened.scenes[0].current_phase == "Interrupted"
+    assert reopened.scenes[0].render_versions == []
+
+
+def test_owned_pre_submission_run_is_not_recovered_while_coordinator_is_alive(tmp_path: Path) -> None:
+    root = tmp_path / "Projects"
+    store = H3ProjectStore(root)
+    project = store.create_project("Active")
+    scene = project.scenes[0]
+    store.claim_active_run(project.id, "run-stale")
+    store.add_render_run(project.id, _running_run(project.id, scene.id))
+
+    live = store.get_project(project.id)
+    assert live.render_runs[0].status == "running"
+    store.release_active_run(project.id, "run-stale")
+
+
+def test_reopen_preserves_submitted_prompt_for_comfyui_correlation(tmp_path: Path) -> None:
+    root = tmp_path / "Projects"
+    store = H3ProjectStore(root)
+    project = store.create_project("Submitted")
+    scene = project.scenes[0]
+    store.set_scene_status(project.id, scene.id, "rendering", prompt_id="prompt-submitted", phase="Sampling")
+    store.add_render_run(project.id, _running_run(project.id, scene.id, prompt_id="prompt-submitted"))
+
+    reopened = H3ProjectStore(root).get_project(project.id)
+    assert reopened.render_runs[0].status == "running"
+    assert reopened.render_runs[0].items[0].prompt_id == "prompt-submitted"
+    assert reopened.scenes[0].status == "rendering"
+
+
+def test_terminal_runs_are_not_changed_by_reopen_recovery(tmp_path: Path) -> None:
+    root = tmp_path / "Projects"
+    store = H3ProjectStore(root)
+    project = store.create_project("Terminal")
+    scene = project.scenes[0]
+    completed = _running_run(project.id, scene.id, prompt_id="prompt-complete").model_copy(update={"id": "run-complete", "status": "complete", "completed_at": "2026-08-14T00:01:00+00:00"})
+    failed = _running_run(project.id, scene.id).model_copy(update={"id": "run-failed", "status": "failed", "completed_at": "2026-08-14T00:01:00+00:00", "failure_or_cancel_reason": "Failed safely."})
+    store.add_render_run(project.id, completed)
+    store.add_render_run(project.id, failed)
+
+    reopened = H3ProjectStore(root).get_project(project.id)
+    assert [(run.id, run.status) for run in reopened.render_runs] == [("run-complete", "complete"), ("run-failed", "failed")]
 
 
 def test_v12_migration_assigns_each_scene_the_project_generation_contract(tmp_path: Path) -> None:

@@ -623,7 +623,7 @@ class ComfyUIMiniMaxH3Handler:
         project_id: str,
         scene_id: str,
         request: H3ProjectRenderRequest,
-        sequence_status_callback: Callable[[str, int | None, int | None, str | None], None] | None = None,
+        sequence_status_callback: Callable[[str, str | None, int | None, int | None, str | None], None] | None = None,
         cancel_requested: Callable[[], bool] | None = None,
     ) -> H3Project:
         try:
@@ -676,7 +676,7 @@ class ComfyUIMiniMaxH3Handler:
                     diagnostics=diagnostics,
                 )
                 if sequence_status_callback:
-                    sequence_status_callback(phase, progress_value, progress_max, diagnostics)
+                    sequence_status_callback(phase, prompt_id, progress_value, progress_max, diagnostics)
 
             result = provider.render(
                 base_url=request.base_url,
