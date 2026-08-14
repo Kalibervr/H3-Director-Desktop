@@ -146,7 +146,7 @@ class H3ProjectStore:
         if sequence_mode == "continuous_sequence":
             scenes = [scene.model_copy(update={"mode": "new_shot" if scene.order == 1 else "continue_previous"}) for scene in scenes]
         project = H3Project(
-            schema_version=16,
+            schema_version=18,
             id=project_id,
             name=cleaned_name,
             created_at=timestamp,
@@ -255,6 +255,10 @@ class H3ProjectStore:
                 version.id == selected_version for version in scene.render_versions
             ):
                 raise ProjectStoreError("The selected render version could not be found.")
+            if "confirmed_outcome" in changes:
+                changes["confirmed_outcome_render_version_id"] = (
+                    scene.selected_render_version_id if changes["confirmed_outcome"].strip() else None
+                )
             scenes.append(scene.model_copy(update=changes))
         if not found:
             raise ProjectStoreError("The selected scene could not be found.")
@@ -388,7 +392,12 @@ class H3ProjectStore:
         completed_scene = next(item for item in scenes if item.id == scene_id)
         prompt = version.final_submitted_prompt or version.final_prompt or version.prompt
         compact = re.sub(r"\s+", " ", prompt).strip()[:1200]
-        entry = H3ContinuityMemoryEntry(scene_id=scene_id, render_version_id=version.id, summary=compact, current_state=compact[:600], audio_summary=completed_scene.custom_audio_instruction)
+        confirmed = (
+            completed_scene.confirmed_outcome.strip()
+            if completed_scene.confirmed_outcome_render_version_id == version.id
+            else ""
+        )
+        entry = H3ContinuityMemoryEntry(scene_id=scene_id, render_version_id=version.id, summary=compact, current_state=confirmed or compact[:600], audio_summary=completed_scene.custom_audio_instruction)
         memory = project.continuity_memory.model_copy(update={"entries": [*project.continuity_memory.entries, entry]})
         return self.save_project(project.model_copy(update={"scenes": scenes, "selected_scene_id": scene_id, "continuity_memory": memory}))
 
@@ -589,12 +598,12 @@ class H3ProjectStore:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             original_schema = payload.get("schema_version")
-            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+            migrated = original_schema in {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17}
             if payload.get("schema_version") == 1:
                 for index, scene in enumerate(payload.get("scenes", []), 1):
                     scene["storage_name"] = _scene_storage_name(int(scene.get("order", index)))
             if migrated:
-                payload["schema_version"] = 16
+                payload["schema_version"] = 18
                 payload.setdefault("continuity_memory", {"entries": []})
                 payload.setdefault("sequence_mode", "independent_shots")
                 payload.setdefault("workflow_profile_id", "minimax_h3_image_to_video")
@@ -603,6 +612,14 @@ class H3ProjectStore:
                     scene.setdefault("workflow_profile_id", payload["workflow_profile_id"])
                     scene.setdefault("workflow_mode", payload["workflow_mode"])
                     scene.setdefault("mode", "new_shot")
+                    scene.setdefault("confirmed_outcome", "")
+                    # v17 stored outcomes per scene. Bind a migrated outcome to
+                    # the version selected at migration time rather than
+                    # claiming it describes another version later.
+                    scene.setdefault(
+                        "confirmed_outcome_render_version_id",
+                        scene.get("selected_render_version_id") if scene.get("confirmed_outcome", "").strip() else None,
+                    )
                     scene.setdefault("reference_fit", "fill_crop")
                     scene.setdefault("ltx_prompt_enhance", False)
                     scene.setdefault("audio_mode", "natural_ambience")

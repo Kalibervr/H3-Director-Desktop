@@ -45,6 +45,19 @@ def test_improve_preserves_authoritative_silent_audio_rules(status: Mock, post: 
     assert result.vision_context == "not_available"
 
 
+@patch("services.h3_ollama_prompt_assistant.requests.post")
+@patch("services.h3_ollama_prompt_assistant.OllamaPromptAssistant.status")
+def test_next_scene_suggestions_keep_numbered_actions_separate_from_audio_composition(status: Mock, post: Mock) -> None:
+    status.return_value = type("Status", (), {"status": "ready", "selected_model_available": True, "message": "ready"})()
+    post.return_value = response({"message": {"content": "1. She reaches the apartment entrance.\n2. She notices a flickering hallway light.\n3. She steps beneath the awning."}})
+    result = OllamaPromptAssistant().suggest_next_scene(request())
+    payload = post.call_args.kwargs["json"]
+    assert result.suggestion.count("\n") == 2
+    assert "no music" not in result.suggestion.lower()
+    assert "exactly three distinct" in payload["messages"][0]["content"].lower()
+    assert "images" not in payload["messages"][1]
+
+
 @patch("services.h3_ollama_prompt_assistant.requests.post", side_effect=requests.Timeout())
 @patch("services.h3_ollama_prompt_assistant.OllamaPromptAssistant.status")
 def test_timeout_is_safe_and_keeps_original_outside_provider(status: Mock, post: Mock) -> None:

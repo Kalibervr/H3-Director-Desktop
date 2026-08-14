@@ -155,6 +155,22 @@ class OllamaPromptAssistant:
             f"Raw prompt: {request.raw_prompt}.{previous}"
         )
 
+    @staticmethod
+    def _next_scene_instruction(request: H3PromptAssistantRequest) -> str:
+        """Keep action selection separate from the one-prompt editor contract."""
+        return (
+            "You are an H3 sequence director. Return exactly three distinct, concise next-scene actions "
+            "as three numbered lines and nothing else. Each action must happen after the confirmed current "
+            "state and begin from its current location. The CURRENT CONFIRMED OUTCOME and CURRENT LOCATION sections "
+            "are authoritative; historical "
+            "context must never pull the story backwards. Each action must be a single filmable next beat for a "
+            "five-second scene. Do not repeat, summarize, or re-stage the previous action. Do not use vague filler, "
+            "or passive descriptions of reflections, shadows, lighting, or atmosphere. Do not include dialogue, music, "
+            "headings, explanations, resolution, FPS, or audio instructions. When SUGGESTION MODE is user_directed_variations, "
+            "preserve the user's core action in every option and vary only camera, staging, timing, emphasis, or reaction.\n\n"
+            f"{request.raw_prompt}"
+        )
+
     def improve(self, request: H3PromptAssistantRequest) -> OllamaSuggestion:
         started = time.perf_counter()
         endpoint = self._endpoint(request.endpoint)
@@ -189,3 +205,28 @@ class OllamaPromptAssistant:
             custom_instruction=request.custom_audio_instruction,
         ))
         return OllamaSuggestion(suggestion=protected, vision_context=vision, raw_response=payload, elapsed_seconds=time.perf_counter() - started, response_metadata=self._metadata(payload))
+
+    def suggest_next_scene(self, request: H3PromptAssistantRequest) -> OllamaSuggestion:
+        """Return raw numbered actions; never apply the single-prompt audio compositor here."""
+        started = time.perf_counter()
+        endpoint = self._endpoint(request.endpoint)
+        status = self.status(endpoint, request.model)
+        if status.status != "ready" or not status.selected_model_available:
+            raise OllamaPromptAssistantError(status.message)
+        try:
+            response = requests.post(
+                f"{endpoint}/api/chat",
+                json={"model": request.model, "stream": False, "keep_alive": self.keep_alive, "messages": [
+                    {"role": "system", "content": self._next_scene_instruction(request)},
+                    {"role": "user", "content": request.raw_prompt},
+                ]},
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            suggestion = self._visible_content(payload)
+        except requests.Timeout as exc:
+            raise OllamaPromptAssistantError("Local Ollama timed out while suggesting the next scene.") from exc
+        except requests.RequestException as exc:
+            raise OllamaPromptAssistantError("Local Ollama could not suggest the next scene.") from exc
+        return OllamaSuggestion(suggestion=suggestion, vision_context="not_used", raw_response=payload, elapsed_seconds=time.perf_counter() - started, response_metadata=self._metadata(payload))

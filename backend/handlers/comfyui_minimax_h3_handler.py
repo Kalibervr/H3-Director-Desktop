@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import json
 import re
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TypeVar
@@ -145,6 +146,15 @@ def _default_provider_factory(paths: H3RuntimePaths) -> ComfyUIMiniMaxH3Provider
     )
 
 
+class SuggestionQualityError(ValueError):
+    """A rejected local suggestion set, retained only for bounded diagnostics."""
+
+    def __init__(self, reasons: list[str], options: list[str]) -> None:
+        self.reasons = reasons
+        self.options = options
+        super().__init__("; ".join(reasons))
+
+
 class ComfyUIMiniMaxH3Handler:
     def __init__(
         self,
@@ -160,6 +170,9 @@ class ComfyUIMiniMaxH3Handler:
         self._project_store = project_store or H3ProjectStore(
             Path(local_app_data) / "H3 Director Desktop" / "Projects"
         )
+        # Request-local diagnostics are intentionally bounded and never affect
+        # project continuity state or leave the local process.
+        self._suggestion_diagnostics: deque[dict[str, object]] = deque(maxlen=20)
         self._sequence = H3SequenceCoordinator(self._project_store, self._render_for_sequence)
 
     def list_projects(self) -> list[H3Project]:
@@ -288,10 +301,120 @@ class ComfyUIMiniMaxH3Handler:
         if version is None: raise HTTPError(422, "The previous scene has no selected completed render version.", code="H3_SEQUENCE_PROMPT_ERROR")
         return target, source, version
 
+    @staticmethod
+    def _confirmed_continuity_context(project: H3Project, source: H3Scene, version: H3RenderVersion) -> tuple[str, str]:
+        """Prefer a user-confirmed outcome over planned prompt prose.
+
+        A render cannot truthfully be visually interpreted without a verified vision
+        workflow, so the editable outcome is intentionally the authority when set.
+        """
+        memory = next((entry for entry in reversed(project.continuity_memory.entries)
+                       if entry.scene_id == source.id and entry.render_version_id == version.id), None)
+        confirmed_outcome = (
+            source.confirmed_outcome.strip()
+            if source.confirmed_outcome_render_version_id == version.id
+            else ""
+        )
+        current_state = confirmed_outcome or (memory.current_state if memory else "") or source.prompt
+        historical = (memory.summary if memory else source.prompt).strip()
+        return current_state[:600], historical[:1200]
+
+    @staticmethod
+    def _parsed_suggestion_options(raw: str) -> list[str]:
+        lines = [re.sub(r"^\s*(?:\d+[.)]|[-*])\s*", "", line).strip() for line in raw.splitlines()]
+        return [line for line in lines if line and "no speech" not in line.lower() and "no music" not in line.lower()]
+
+    @classmethod
+    def _suggestion_options(cls, raw: str, current_state: str, historical: str, user_direction: str) -> list[str]:
+        options = cls._parsed_suggestion_options(raw)
+        reasons: list[str] = []
+        if len(options) != 3:
+            reasons.append("malformed option count: exactly three concise options are required")
+        normalized = [re.sub(r"[^a-z0-9]+", " ", item.lower()).strip() for item in options]
+        if len(set(normalized)) != 3:
+            reasons.append("duplicate or near-duplicate actions")
+        passive = {"reflection", "reflections", "shadow", "shadows", "lighting", "light", "rain", "pavement", "atmosphere"}
+        actions = {"enter", "enters", "step", "steps", "open", "opens", "unlock", "unlocks", "check", "checks", "notice", "notices", "turn", "turns", "look", "looks", "wait", "waits", "move", "moves", "reach", "reaches", "approach", "approaches"}
+        if any(not (set(re.findall(r"[a-z]+", item.lower())) & actions) for item in options):
+            reasons.append("one or more options are too passive or lack a concrete action")
+        if all(set(re.findall(r"[a-z]+", item.lower())).issubset(passive | {"the", "a", "an", "and", "with", "at", "in", "of", "to", "figure"}) for item in options):
+            reasons.append("all options are atmosphere-only")
+        ignored = {"the", "and", "with", "from", "that", "this", "figure", "subject", "same", "scene", "current", "state", "reaches", "reached", "standing", "outside", "night"}
+        anchors = {word for word in re.findall(r"[a-z]{4,}", current_state.lower()) if word not in ignored}
+        # Keep the check concrete without requiring the model to repeat a location
+        # verbatim (for example, "doorway" is a truthful synonym for "entrance").
+        synonyms = {
+            "entrance": {"entrance", "door", "doorway", "threshold", "lobby"},
+            "apartment": {"apartment", "door", "doorway", "threshold", "lobby"},
+        }
+        grounded = 0
+        for option in options:
+            words = set(re.findall(r"[a-z]+", option.lower()))
+            if words & anchors or any(words & synonyms.get(anchor, set()) for anchor in anchors):
+                grounded += 1
+        if anchors and grounded < 2:
+            reasons.append("current location or confirmed state is not preserved by at least two options")
+        historical_words = set(re.findall(r"[a-z]+", historical.lower()))
+        prior_place_words = historical_words & {"street", "pavement", "puddle", "sidewalk"}
+        if "street" in prior_place_words:
+            prior_place_words |= {"pavement", "puddle", "sidewalk"}
+        if prior_place_words and any((set(re.findall(r"[a-z]+", item.lower())) & prior_place_words) and not (set(re.findall(r"[a-z]+", item.lower())) & {"entrance", "door", "doorway", "threshold", "lobby"}) for item in options):
+            reasons.append("historical location is replayed instead of advancing from the current location")
+        direction_words = {word for word in re.findall(r"[a-z]{3,}", user_direction.lower()) if word not in {"closer", "angle", "camera", "shot", "scene", "with", "the", "and", "then", "this", "that", "figure", "subject"}}
+        concept_groups = []
+        if direction_words & {"code", "keypad", "pin", "digits"}:
+            concept_groups.append({"code", "keypad", "pin", "digits", "lock"})
+        if direction_words & {"open", "opens", "unlock", "unlocks"}:
+            concept_groups.append({"open", "opens", "unlock", "unlocks", "opens"})
+        if not (direction_words & {"code", "keypad", "pin", "digits"}) and direction_words & {"enter", "enters", "inside", "through"}:
+            concept_groups.append({"enter", "enters", "inside", "through", "step", "steps"})
+        if direction_words and not concept_groups:
+            concept_groups.append(direction_words)
+        if concept_groups:
+            for option in options:
+                words = set(re.findall(r"[a-z]+", option.lower()))
+                if any(not (words & group) for group in concept_groups):
+                    reasons.append("user-directed core action is not preserved in every option")
+                    break
+        if reasons:
+            raise SuggestionQualityError(reasons, options)
+        return options
+
+    @staticmethod
+    def _continuity_location(current_state: str) -> str:
+        words = set(re.findall(r"[a-z]+", current_state.lower()))
+        if words & {"entrance", "door", "doorway", "threshold", "lobby"}:
+            return "apartment entrance / doorway"
+        return current_state
+
+    @staticmethod
+    def _last_confirmed_action(current_state: str) -> str:
+        compact = re.sub(r"^(?:the )?(?:lone )?(?:figure|subject)\s+", "", current_state.strip(), flags=re.IGNORECASE)
+        return compact or current_state
+
+    def _record_suggestion_diagnostic(self, *, project: H3Project, target: H3Scene, source: H3Scene, version: H3RenderVersion, request: H3NextScenePromptRequest, current_state: str, user_direction: str, options: list[str], reasons: list[str], elapsed_seconds: float) -> dict[str, object]:
+        diagnostic: dict[str, object] = {
+            "request_id": request.request_id,
+            "project_id": project.id,
+            "scene_id": target.id,
+            "source_scene_id": source.id,
+            "source_render_version_id": version.id,
+            "confirmed_outcome": current_state[:600],
+            "user_creative_direction": user_direction[:600] or None,
+            "rejected_options": [item[:400] for item in options[:3]],
+            "rejection_reasons": reasons[:8],
+            "provider": "ollama",
+            "model": request.model,
+            "elapsed_seconds": round(elapsed_seconds, 3),
+        }
+        self._suggestion_diagnostics.append(diagnostic)
+        return diagnostic
+
     def develop_next_scene(self, project_id: str, scene_id: str, request: H3NextScenePromptRequest) -> H3NextScenePromptResponse:
         project = self._project_store.get_project(project_id); target, source, version = self._next_scene_source(project, scene_id)
-        history = " ".join(entry.summary for entry in project.continuity_memory.entries[-3:])
-        context = H3PromptAssistantRequest(endpoint=request.endpoint, model=request.model, raw_prompt=request.current_user_instruction, scene_number=target.order, scene_name=target.name, scene_mode="continue_previous", duration_seconds=target.duration_seconds, aspect_ratio=target.aspect_ratio, width=target.width, height=target.height, fps=target.fps, project_name=project.name, sequence_mode=project.sequence_mode, previous_scene_number=source.order, previous_scene_name=source.name, previous_scene_prompt=history or source.prompt, previous_final_prompt=version.final_submitted_prompt or version.final_prompt, continuity_source_version_id=version.id, audio_mode=target.audio_mode, no_speech=target.no_speech, no_music=target.no_music, custom_audio_instruction=target.custom_audio_instruction)
+        current_state, historical = self._confirmed_continuity_context(project, source, version)
+        continuity = f"CURRENT STATE (authoritative): {current_state}\nHISTORICAL CONTEXT (do not replay): {historical}"
+        context = H3PromptAssistantRequest(endpoint=request.endpoint, model=request.model, raw_prompt=request.current_user_instruction, scene_number=target.order, scene_name=target.name, scene_mode="continue_previous", duration_seconds=target.duration_seconds, aspect_ratio=target.aspect_ratio, width=target.width, height=target.height, fps=target.fps, project_name=project.name, sequence_mode=project.sequence_mode, previous_scene_number=source.order, previous_scene_name=source.name, previous_scene_prompt=continuity, previous_final_prompt=version.final_submitted_prompt or version.final_prompt, continuity_source_version_id=version.id, audio_mode=target.audio_mode, no_speech=target.no_speech, no_music=target.no_music, custom_audio_instruction=target.custom_audio_instruction)
         try:
             ollama_result = OllamaPromptAssistant().improve(context); developed = ollama_result.suggestion; elapsed_seconds = ollama_result.elapsed_seconds; provider = "ollama"
         except (OllamaPromptAssistantError, ValueError):
@@ -301,21 +424,23 @@ class ComfyUIMiniMaxH3Handler:
         return H3NextScenePromptResponse(provider=provider, developed_prompt=developed, updated_continuity_summary=request.current_user_instruction.strip(), next_scene_summary=request.current_user_instruction.strip(), source_scene_id=source.id, source_render_version_id=version.id, continuity_artifact_id=artifact, message=message, request_id=request.request_id, elapsed_seconds=elapsed_seconds)
 
     def suggest_next_scene(self, project_id: str, scene_id: str, request: H3NextScenePromptRequest) -> H3NextSceneSuggestionsResponse:
-        project = self._project_store.get_project(project_id); _, source, version = self._next_scene_source(project, scene_id)
-        state = next((entry.current_state for entry in reversed(project.continuity_memory.entries) if entry.scene_id == source.id and entry.render_version_id == version.id), source.prompt[:180])
-        fallback = [f"Continue from the current moment: {state}", "Pause and react to a new sound or movement nearby.", "Move forward into the next nearby space or action."]
+        project = self._project_store.get_project(project_id); target, source, version = self._next_scene_source(project, scene_id)
+        state, historical = self._confirmed_continuity_context(project, source, version)
+        user_direction = request.current_user_instruction.strip()
+        mode = "user_directed_variations" if user_direction else "original_ideas"
+        elapsed_seconds = 0.0
         try:
-            context = H3PromptAssistantRequest(endpoint=request.endpoint, model=request.model, raw_prompt=("Suggest exactly three concise next-scene actions as three numbered lines. " f"Current continuity state: {state}"), scene_number=source.order + 1, scene_name="Next scene", scene_mode="continue_previous", duration_seconds=5, aspect_ratio="1:1 (Square)", width=640, height=640, fps=24, project_name=project.name, sequence_mode=project.sequence_mode, previous_scene_number=source.order, previous_scene_name=source.name, previous_scene_prompt=state, previous_final_prompt=version.final_submitted_prompt or version.final_prompt, continuity_source_version_id=version.id, audio_mode="natural_ambience", no_speech=True, no_music=True, request_id=request.request_id)
-            ollama_result = OllamaPromptAssistant().improve(context); raw = ollama_result.suggestion; elapsed_seconds = ollama_result.elapsed_seconds
-            lines = [re.sub(r"^\s*(?:\d+[.)]|[-*])\s*", "", line).strip() for line in raw.splitlines()]
-            options = [line for line in lines if line and "no speech" not in line.lower() and "no music" not in line.lower()][:3]
-            if len(options) != 3:
-                options = fallback; provider = "deterministic_local"; message = "Local Ollama returned an incomplete suggestion set; safe local options are shown."
-            else:
-                provider = "ollama"; message = "Three local Ollama suggestions are ready to stage."
-        except (OllamaPromptAssistantError, ValueError):
-            options = fallback; provider = "deterministic_local"; message = "Local Ollama was unavailable; safe local options are shown."; elapsed_seconds = 0.0
-        return H3NextSceneSuggestionsResponse(options=options, source_scene_id=source.id, source_render_version_id=version.id, provider=provider, message=message, request_id=request.request_id, elapsed_seconds=elapsed_seconds)
+            structured = f"SUGGESTION MODE: {mode}\n\nCURRENT CONFIRMED OUTCOME (primary anchor):\n{state}\n\nCURRENT LOCATION (primary anchor):\n{self._continuity_location(state)}\n\nLAST CONFIRMED ACTION:\n{self._last_confirmed_action(state)}\n\nPERSISTENT CONTINUITY:\nSame lone figure; rainy night; wet urban environment; cinematic realism; natural ambience.\n\nHISTORICAL CONTEXT (secondary; do not replay):\n{historical}\n\nOPTIONAL USER DIRECTION (highest priority when present):\n{user_direction or '(none — invent original next beats)'}\n\nTASK:\n{'Create three concise, genuinely different variations of the user direction. Preserve its core action; vary camera, staging, timing, or emphasis.' if user_direction else 'Create three concise, original next actions that happen immediately after the confirmed outcome.'}"
+            context = H3PromptAssistantRequest(endpoint=request.endpoint, model=request.model, raw_prompt=structured, scene_number=target.order, scene_name=target.name, scene_mode="continue_previous", duration_seconds=target.duration_seconds, aspect_ratio=target.aspect_ratio, width=target.width, height=target.height, fps=target.fps, project_name=project.name, sequence_mode=project.sequence_mode, previous_scene_number=source.order, previous_scene_name=source.name, previous_scene_prompt=historical, previous_final_prompt=version.final_submitted_prompt or version.final_prompt, continuity_source_version_id=version.id, audio_mode=target.audio_mode, no_speech=target.no_speech, no_music=target.no_music, custom_audio_instruction=target.custom_audio_instruction, request_id=request.request_id)
+            ollama_result = OllamaPromptAssistant().suggest_next_scene(context); raw = ollama_result.suggestion; elapsed_seconds = ollama_result.elapsed_seconds
+            options = self._suggestion_options(raw, state, historical, user_direction)
+        except SuggestionQualityError as exc:
+            diagnostic = self._record_suggestion_diagnostic(project=project, target=target, source=source, version=version, request=request, current_state=state, user_direction=user_direction, options=exc.options, reasons=exc.reasons, elapsed_seconds=elapsed_seconds)
+            raise HTTPError(422, "Suggestions were not grounded in the confirmed scene outcome. Refine Scene Outcome and retry.", code="H3_SEQUENCE_SUGGESTION_QUALITY", details={"suggestion_diagnostics": diagnostic}) from exc
+        except OllamaPromptAssistantError as exc:
+            raise HTTPError(422, str(exc), code="H3_SEQUENCE_SUGGESTION_ERROR") from exc
+        message = "Three local Ollama variations based on your direction are ready to stage." if user_direction else "Three local Ollama ideas based on the current scene are ready to stage."
+        return H3NextSceneSuggestionsResponse(options=options, source_scene_id=source.id, source_render_version_id=version.id, provider="ollama", mode=mode, message=message, request_id=request.request_id, elapsed_seconds=elapsed_seconds)
 
     def warm_prompt_assistant(self, endpoint: str, model: str) -> H3PromptAssistantStatusResponse:
         try:

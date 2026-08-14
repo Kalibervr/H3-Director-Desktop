@@ -26,20 +26,22 @@ def build_http_error_response(
     detail: object,
     *,
     code: str | None = None,
+    details: dict[str, object] | None = None,
 ) -> HTTPErrorResponse:
     message = _normalize_message(detail)
     return HTTPErrorResponse(
         code=code or _default_code(status_code, message),
         message=message,
+        details=details,
     )
 
 
 class HTTPError(Exception):
     """Raised by route functions to signal an HTTP error response."""
 
-    def __init__(self, status_code: int, detail: str, code: str | None = None) -> None:
+    def __init__(self, status_code: int, detail: str, code: str | None = None, details: dict[str, object] | None = None) -> None:
         self.status_code = status_code
-        self.response = build_http_error_response(status_code, detail, code=code)
+        self.response = build_http_error_response(status_code, detail, code=code, details=details)
         self.detail = self.response.message
         self.code = self.response.code
         super().__init__(self.detail)

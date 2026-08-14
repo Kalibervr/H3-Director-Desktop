@@ -25,6 +25,7 @@ import {
   deleteH3Scene,
   duplicateH3Scene,
   suggestH3NextScene,
+  H3RequestError,
   getH3Project,
   listH3Projects,
   prepareH3Continuity,
@@ -678,13 +679,14 @@ export function Home() {
   }
 
   const developNextScene = async () => {
-    if (!project || !scene || promptAssistantBusy || !scene.prompt.trim() || activePromptAssistantRequest.current) return
+    const instruction = promptAssistant.selectedInstruction?.trim() || scene?.prompt.trim()
+    if (!project || !scene || promptAssistantBusy || !instruction || activePromptAssistantRequest.current) return
     const requestId = crypto.randomUUID()
     activePromptAssistantRequest.current = requestId
     const startedAt = performance.now()
     setPromptAssistant({ status: 'running', action: 'develop', message: 'Developing Next Scene…' })
     setPromptAssistantBusy(true); setPromptAssistantMessage('Developing next scene…')
-    try { const instruction = promptAssistant.selectedInstruction ?? scene.prompt; const result = await developH3NextScene(project.id, scene.id, ollamaEndpoint, runtimeConfig?.ollamaModel || 'local', instruction, requestId); setPromptSuggestion(result.developed_prompt); setPromptAssistantMessage(result.message); if (activePromptAssistantRequest.current === requestId) { activePromptAssistantRequest.current = null; setPromptAssistant({ status: 'completed', action: 'develop', result: result.developed_prompt, message: result.message, elapsedSeconds: (performance.now() - startedAt) / 1000 }) } }
+    try { const result = await developH3NextScene(project.id, scene.id, ollamaEndpoint, runtimeConfig?.ollamaModel || 'local', instruction, requestId); setPromptSuggestion(result.developed_prompt); setPromptAssistantMessage(result.message); if (activePromptAssistantRequest.current === requestId) { activePromptAssistantRequest.current = null; setPromptAssistant({ status: 'completed', action: 'develop', result: result.developed_prompt, message: result.message, elapsedSeconds: (performance.now() - startedAt) / 1000 }) } }
     catch (error) { setPromptAssistantMessage(error instanceof Error ? error.message : 'Next-scene development failed.'); if (activePromptAssistantRequest.current === requestId) { activePromptAssistantRequest.current = null; setPromptAssistant({ status: 'failed', action: 'develop', error: error instanceof Error ? error.message : 'Next-scene development failed.', elapsedSeconds: (performance.now() - startedAt) / 1000 }) } }
     finally { setPromptAssistantBusy(false) }
   }
@@ -695,8 +697,8 @@ export function Home() {
     const startedAt = performance.now()
     setPromptAssistant({ status: 'running', action: 'suggest', message: 'Suggesting Next Scene…' })
     setPromptAssistantBusy(true); setPromptAssistantMessage('Suggesting next actions…')
-    try { const result = await suggestH3NextScene(project.id, scene.id, ollamaEndpoint, runtimeConfig?.ollamaModel || 'local', requestId); setPromptSuggestion(result.options.join('\n')); setPromptAssistantMessage(result.message); if (activePromptAssistantRequest.current === requestId) { activePromptAssistantRequest.current = null; setPromptAssistant({ status: 'completed', action: 'suggest', suggestions: result.options, message: result.message, elapsedSeconds: (performance.now() - startedAt) / 1000 }) } }
-    catch (error) { setPromptAssistantMessage(error instanceof Error ? error.message : 'Suggestions are unavailable.'); if (activePromptAssistantRequest.current === requestId) { activePromptAssistantRequest.current = null; setPromptAssistant({ status: 'failed', action: 'suggest', error: error instanceof Error ? error.message : 'Suggestions are unavailable.', elapsedSeconds: (performance.now() - startedAt) / 1000 }) } }
+    try { const direction = scene.prompt.trim(); const result = await suggestH3NextScene(project.id, scene.id, ollamaEndpoint, runtimeConfig?.ollamaModel || 'local', direction, requestId); setPromptSuggestion(result.options.join('\n')); setPromptAssistantMessage(result.message); if (activePromptAssistantRequest.current === requestId) { activePromptAssistantRequest.current = null; setPromptAssistant({ status: 'completed', action: 'suggest', suggestions: result.options, suggestionMode: result.mode, message: result.message, elapsedSeconds: (performance.now() - startedAt) / 1000 }) } }
+    catch (error) { const diagnostics = error instanceof H3RequestError ? error.details?.suggestion_diagnostics : undefined; setPromptAssistantMessage(error instanceof Error ? error.message : 'Suggestions are unavailable.'); if (activePromptAssistantRequest.current === requestId) { activePromptAssistantRequest.current = null; setPromptAssistant({ status: 'failed', action: 'suggest', error: error instanceof Error ? error.message : 'Suggestions are unavailable.', diagnostics, elapsedSeconds: (performance.now() - startedAt) / 1000 }) } }
     finally { setPromptAssistantBusy(false) }
   }
 
@@ -773,7 +775,10 @@ export function Home() {
         onDismissPromptAssistant={() => setPromptAssistant({ status: 'idle' })}
         onRetryPromptAssistant={() => { if (promptAssistant.action === 'improve') void improvePrompt(); else if (promptAssistant.action === 'develop') void developNextScene(); else if (promptAssistant.action === 'suggest') void suggestNextScene() }}
         onApplyPromptAssistantResult={() => { if (promptAssistant.result) updateSceneLocally({ prompt: promptAssistant.result }); setPromptAssistant({ status: 'idle' }) }}
-        onSelectNextSceneSuggestion={value => setPromptAssistant(current => ({ ...current, selectedInstruction: value, message: 'Action staged. Click Develop Next Scene to expand it with sequence context.' }))}
+        onSelectNextSceneSuggestion={value => {
+          if (scene && !scene.prompt.trim()) updateSceneLocally({ prompt: value })
+          setPromptAssistant(current => ({ ...current, selectedInstruction: value, message: scene?.prompt.trim() ? 'Action selected. Your current prompt is unchanged; Develop Next Scene will use the selected action.' : 'Action staged in the prompt. Click Develop Next Scene to expand it with sequence context.' }))
+        }}
       />
       {/* Legacy sidebar retained in source history while the extracted component above is the sole rendered control surface.
       <aside className="row-span-2 min-h-0 overflow-y-auto border-l border-white/10 bg-[#0b0e13] p-5">

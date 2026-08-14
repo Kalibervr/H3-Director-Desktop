@@ -122,6 +122,8 @@ export interface H3Scene {
   order: number
   name: string
   prompt: string
+  confirmed_outcome: string
+  confirmed_outcome_render_version_id: string | null
   audio_mode: H3AudioMode
   no_speech: boolean
   no_music: boolean
@@ -156,7 +158,7 @@ export interface H3Scene {
 }
 
 export interface H3Project {
-  schema_version: 16
+  schema_version: 18
   id: string
   name: string
   created_at: string
@@ -179,13 +181,16 @@ export interface H3Project {
 }
 
 export interface H3NextScenePromptResult { provider: 'ollama' | 'deterministic_local'; developed_prompt: string; updated_continuity_summary: string; next_scene_summary: string; source_scene_id: string; source_render_version_id: string; continuity_artifact_id: string | null; message: string; request_id: string | null }
-export interface H3NextSceneSuggestions { options: string[]; source_scene_id: string; source_render_version_id: string; provider: 'ollama' | 'deterministic_local'; message: string; request_id: string | null }
+export interface H3SuggestionDiagnostics { request_id: string | null; project_id: string; scene_id: string; source_scene_id: string; source_render_version_id: string; confirmed_outcome: string; user_creative_direction: string | null; rejected_options: string[]; rejection_reasons: string[]; provider: 'ollama'; model: string; elapsed_seconds: number }
+export interface H3NextSceneSuggestions { options: string[]; source_scene_id: string; source_render_version_id: string; provider: 'ollama' | 'deterministic_local'; mode: 'original_ideas' | 'user_directed_variations'; message: string; request_id: string | null }
+export class H3RequestError extends Error { constructor(message: string, readonly code?: string, readonly details?: { suggestion_diagnostics?: H3SuggestionDiagnostics }) { super(message); this.name = 'H3RequestError' } }
 
 async function readJson<T>(response: Response): Promise<T> {
-  const payload = await response.json() as T | { message?: string }
+  const payload = await response.json() as T | { message?: string; code?: string; details?: { suggestion_diagnostics?: H3SuggestionDiagnostics } }
   if (!response.ok) {
     const message = typeof payload === 'object' && payload && 'message' in payload ? payload.message : undefined
-    throw new Error(message || 'The local project request failed.')
+    const errorPayload = payload as { message?: string; code?: string; details?: { suggestion_diagnostics?: H3SuggestionDiagnostics } }
+    throw new H3RequestError(message || 'The local project request failed.', errorPayload.code, errorPayload.details)
   }
   return payload as T
 }
@@ -238,8 +243,8 @@ export async function continueH3FromPrevious(projectId: string, sceneId: string)
 export async function developH3NextScene(projectId: string, sceneId: string, endpoint: string, model: string, currentUserInstruction: string, requestId: string): Promise<H3NextScenePromptResult> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/prompt-assistant/develop-next`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint, model, current_user_instruction: currentUserInstruction, request_id: requestId }) }))
 }
-export async function suggestH3NextScene(projectId: string, sceneId: string, endpoint: string, model: string, requestId: string): Promise<H3NextSceneSuggestions> {
-  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/prompt-assistant/suggest-next`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint, model, current_user_instruction: 'Suggest the next scene action.', request_id: requestId }) }))
+export async function suggestH3NextScene(projectId: string, sceneId: string, endpoint: string, model: string, currentUserInstruction: string, requestId: string): Promise<H3NextSceneSuggestions> {
+  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/prompt-assistant/suggest-next`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint, model, current_user_instruction: currentUserInstruction, request_id: requestId }) }))
 }
 
 export async function getH3Project(projectId: string): Promise<H3Project> {
@@ -254,7 +259,7 @@ export async function updateH3Project(projectId: string, update: Partial<Pick<H3
 
 export const renameH3Project = (projectId: string, name: string) => updateH3Project(projectId, { name })
 
-export async function updateH3Scene(projectId: string, sceneId: string, update: Partial<Pick<H3Scene, 'name' | 'prompt' | 'audio_mode' | 'no_speech' | 'no_music' | 'custom_audio_instruction' | 'reference_image' | 'reference_fit' | 'ltx_prompt_enhance' | 'workflow_profile_id' | 'workflow_mode' | 'aspect_ratio' | 'resolution_megapixels' | 'width' | 'height' | 'fps' | 'duration_seconds' | 'frame_count' | 'seed' | 'selected_render_version_id' | 'mode' | 'continuity_strategy' | 'continuity_offset_frames'>>): Promise<H3Project> {
+export async function updateH3Scene(projectId: string, sceneId: string, update: Partial<Pick<H3Scene, 'name' | 'prompt' | 'confirmed_outcome' | 'audio_mode' | 'no_speech' | 'no_music' | 'custom_audio_instruction' | 'reference_image' | 'reference_fit' | 'ltx_prompt_enhance' | 'workflow_profile_id' | 'workflow_mode' | 'aspect_ratio' | 'resolution_megapixels' | 'width' | 'height' | 'fps' | 'duration_seconds' | 'frame_count' | 'seed' | 'selected_render_version_id' | 'mode' | 'continuity_strategy' | 'continuity_offset_frames'>>): Promise<H3Project> {
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(update),
   }))

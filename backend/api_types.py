@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from typing import Annotated
-from typing import Literal, NamedTuple, TypeAlias
+from typing import Any, Literal, NamedTuple, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StringConstraints, model_validator
 
@@ -283,6 +283,13 @@ class H3Scene(BaseModel):
     order: int = Field(ge=1)
     name: str = Field(min_length=1, max_length=120)
     prompt: str
+    # User-confirmed outcome is deliberately separate from the planned prompt: a
+    # generated clip may end somewhere different than its prompt described.
+    confirmed_outcome: str = Field(default="", max_length=600)
+    # The accepted immutable render that this user-confirmed outcome describes.
+    # A scene may have several materially different versions, so this must not
+    # silently carry forward when the user selects another version.
+    confirmed_outcome_render_version_id: str | None = None
     audio_mode: Literal["natural_ambience", "dialogue", "silent"] = "natural_ambience"
     no_speech: bool = False
     no_music: bool = False
@@ -367,7 +374,7 @@ class H3ContinuityMemory(BaseModel):
 
 class H3Project(BaseModel):
     model_config = ConfigDict(strict=True)
-    schema_version: Literal[16]
+    schema_version: Literal[18]
     id: str
     name: str = Field(min_length=1, max_length=120)
     created_at: str
@@ -409,6 +416,7 @@ class H3SceneUpdateRequest(BaseModel):
     model_config = ConfigDict(strict=True)
     name: str | None = Field(default=None, min_length=1, max_length=120)
     prompt: str | None = None
+    confirmed_outcome: str | None = Field(default=None, max_length=600)
     audio_mode: Literal["natural_ambience", "dialogue", "silent"] | None = None
     no_speech: bool | None = None
     no_music: bool | None = None
@@ -516,7 +524,7 @@ class H3NextScenePromptRequest(BaseModel):
     model_config = ConfigDict(strict=True)
     endpoint: str = "http://127.0.0.1:11434"
     model: str = Field(min_length=1, max_length=300)
-    current_user_instruction: str = Field(min_length=1, max_length=12000)
+    current_user_instruction: str = Field(default="", max_length=12000)
     request_id: str | None = Field(default=None, min_length=1, max_length=120)
 
 
@@ -540,6 +548,7 @@ class H3NextSceneSuggestionsResponse(BaseModel):
     source_scene_id: str
     source_render_version_id: str
     provider: Literal["ollama", "deterministic_local"]
+    mode: Literal["original_ideas", "user_directed_variations"]
     message: str
     request_id: str | None = None
     elapsed_seconds: float = Field(ge=0)
@@ -834,6 +843,7 @@ class StatusResponse(BaseModel):
 class HTTPErrorResponse(BaseModel):
     code: str
     message: str
+    details: dict[str, Any] | None = None
 
 
 class LtxInsufficientFundsErrorResponse(BaseModel):
