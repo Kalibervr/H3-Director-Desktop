@@ -661,6 +661,30 @@ class H3ProjectStore:
                         item.setdefault("progress_value", None)
                         item.setdefault("progress_max", None)
                         item.setdefault("diagnostics", None)
+            # Legacy projects could retain a prompt-only/T2V project profile on
+            # an incomplete continuation target. The target has a continuity
+            # frame and must render through its verified I2V contract instead.
+            normalized_continuation_profiles = False
+            scenes_payload = payload.get("scenes", [])
+            if isinstance(scenes_payload, list):
+                ordered_payload = sorted(
+                    (scene for scene in scenes_payload if isinstance(scene, dict)),
+                    key=lambda scene: int(scene.get("order", 0)),
+                )
+                transitions = {
+                    "minimax_h3_no_reference": ("minimax_h3_image_to_video", "image_to_video"),
+                    "ltx_2_5_text_to_video": ("ltx_2_5_image_to_video", "image_to_video"),
+                }
+                for index, target in enumerate(ordered_payload):
+                    if index == 0 or target.get("mode") != "continue_previous" or target.get("render_versions"):
+                        continue
+                    source = ordered_payload[index - 1]
+                    destination = transitions.get(source.get("workflow_profile_id"))
+                    if destination is None:
+                        continue
+                    if (target.get("workflow_profile_id"), target.get("workflow_mode")) != destination:
+                        target["workflow_profile_id"], target["workflow_mode"] = destination
+                        normalized_continuation_profiles = True
             project = H3Project.model_validate(payload)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             raise ProjectStoreError("The local project metadata is invalid or unreadable.") from exc
@@ -696,6 +720,6 @@ class H3ProjectStore:
             hydrated_scenes.append(scene.model_copy(update={"render_versions": versions}))
         if timing_hydrated:
             project = project.model_copy(update={"scenes": hydrated_scenes})
-        if migrated or interrupted or timing_hydrated:
+        if migrated or normalized_continuation_profiles or interrupted or timing_hydrated:
             _atomic_json_write(path, project.model_dump(mode="json"))
         return project

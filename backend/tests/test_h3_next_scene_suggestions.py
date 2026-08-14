@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from api_types import H3NextScenePromptRequest, H3RenderVersion, H3SceneUpdateRequest, MiniMaxH3VideoProbeResponse
+from api_types import H3ContinuityArtifact, H3NextScenePromptRequest, H3RenderVersion, H3SceneUpdateRequest, H3SequenceStartRequest, MiniMaxH3VideoProbeResponse
 from handlers.comfyui_minimax_h3_handler import ComfyUIMiniMaxH3Handler
 from _routes._errors import HTTPError
 from services.h3_ollama_prompt_assistant import OllamaSuggestion, OllamaPromptAssistant
@@ -119,3 +119,64 @@ def test_confirmed_outcome_is_not_reused_for_a_different_selected_version(tmp_pa
     assert target.id == scene_id
     assert state == "A different take ends in a lobby."
     assert historical == "A different take ends in a lobby."
+
+
+def test_sequence_preflight_uses_continuation_target_profile_not_project_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    handler, project_id, scene_id = _handler(tmp_path)
+    project = handler._project_store.update_project(project_id, workflow_profile_id="minimax_h3_no_reference", workflow_mode="text_to_video")
+    source = project.scenes[0]
+    handler._project_store.update_scene(project_id, source.id, H3SceneUpdateRequest(workflow_profile_id="minimax_h3_no_reference", workflow_mode="text_to_video"))
+    calls: list[object] = []
+    monkeypatch.setattr(handler, "get_status", lambda base_url, profile_id: calls.append((base_url, profile_id)) or type("Status", (), {"status": "connected", "workflow_contract_valid": True, "errors": []})())
+    sentinel = object()
+    monkeypatch.setattr(handler._sequence, "start", lambda *args, **kwargs: sentinel)
+    result = handler.start_sequence(project_id, H3SequenceStartRequest(base_url="http://127.0.0.1:8190", kind="scene", start_scene_id=scene_id))
+    assert result is sentinel
+    assert calls == [("http://127.0.0.1:8190", "minimax_h3_image_to_video")]
+
+
+def test_legacy_prompt_only_continuation_target_migrates_to_minimax_i2v(tmp_path: Path) -> None:
+    handler, project_id, scene_id = _handler(tmp_path)
+    project = handler._project_store.get_project(project_id)
+    source = project.scenes[0]
+    project_file = Path(project.project_root) / "project.json"
+    payload = json.loads(project_file.read_text(encoding="utf-8"))
+    payload["workflow_profile_id"] = "minimax_h3_no_reference"
+    payload["workflow_mode"] = "text_to_video"
+    payload["scenes"][0]["workflow_profile_id"] = "minimax_h3_no_reference"
+    payload["scenes"][0]["workflow_mode"] = "text_to_video"
+    payload["scenes"][1]["workflow_profile_id"] = "minimax_h3_no_reference"
+    payload["scenes"][1]["workflow_mode"] = "text_to_video"
+    payload["scenes"][1]["mode"] = "continue_previous"
+    project_file.write_text(json.dumps(payload), encoding="utf-8")
+    migrated = handler._project_store.get_project(project_id)
+    target = next(scene for scene in migrated.scenes if scene.id == scene_id)
+    assert source.selected_render_version_id == "v001"
+    assert (target.workflow_profile_id, target.workflow_mode) == ("minimax_h3_image_to_video", "image_to_video")
+
+
+def test_sequence_preflight_keeps_unknown_target_profiles_blocked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    handler, project_id, scene_id = _handler(tmp_path)
+    project = handler._project_store.get_project(project_id)
+    unsafe = project.model_copy(update={"scenes": [scene.model_copy(update={"workflow_profile_id": "imported_unverified"}) if scene.id == scene_id else scene for scene in project.scenes]})
+    monkeypatch.setattr(handler._project_store, "get_project", lambda _project_id: unsafe)
+    with pytest.raises(HTTPError, match="not verified") as exc:
+        handler.start_sequence(project_id, H3SequenceStartRequest(kind="scene", start_scene_id=scene_id))
+    assert exc.value.response.code == "H3_PROFILE_NOT_READY"
+
+
+def test_ltx_text_to_video_continuation_switches_target_to_ltx_i2v(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    handler, project_id, scene_id = _handler(tmp_path)
+    project = handler._project_store.get_project(project_id)
+    source = project.scenes[0]
+    handler._project_store.update_scene(project_id, source.id, H3SceneUpdateRequest(workflow_profile_id="ltx_2_5_text_to_video", workflow_mode="text_to_video"))
+
+    class Extractor:
+        def __init__(self, *_args: object) -> None: pass
+        def extract(self, project, scene):
+            return H3ContinuityArtifact(id="c001", number=1, created_at="2026-08-14T00:00:00+00:00", root=str(tmp_path), image_file=str(tmp_path / "frame.png"), metadata_file=str(tmp_path / "metadata.json"), image_sha256="a" * 64, source_scene_id=source.id, source_render_version_id="v001", source_video_reference=str(tmp_path / "source.mp4"), source_video_sha256="b" * 64, frame_index=123, timestamp_seconds=5.125, strategy="last_valid_frame", offset_from_end_frames=0, source_frame_count=124, source_fps="24/1")
+
+    monkeypatch.setattr("handlers.comfyui_minimax_h3_handler.H3ContinuityExtractor", Extractor)
+    updated = handler.continue_from_previous(project_id, scene_id).project
+    target = next(scene for scene in updated.scenes if scene.id == scene_id)
+    assert (target.workflow_profile_id, target.workflow_mode, target.mode) == ("ltx_2_5_image_to_video", "image_to_video", "continue_previous")

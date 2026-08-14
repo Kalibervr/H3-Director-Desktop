@@ -8,7 +8,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from _routes._errors import HTTPError
-from api_types import H3ProjectRenderRequest, H3RenderRun, H3SequenceItem
+from api_types import H3Project, H3ProjectRenderRequest, H3RenderRun, H3Scene, H3SequenceItem
 from services.h3_project_store import H3ProjectStore, ProjectStoreError
 from services.comfyui_minimax_h3_provider import RenderCancelled
 
@@ -18,6 +18,29 @@ def _now() -> str:
 
 
 RenderScene = Callable[[str, str, H3ProjectRenderRequest, Callable[[str, int | None, int | None, str | None], None], Callable[[], bool]], object]
+
+
+def resolve_sequence_scenes(project: H3Project, *, kind: str, start_scene_id: str | None) -> list[H3Scene]:
+    """Return the exact scenes a requested manual queue will render."""
+    ordered = sorted(project.scenes, key=lambda scene: scene.order)
+    if kind == "scene":
+        if not start_scene_id:
+            raise ProjectStoreError("Render Scene requires a selected scene.")
+        ordered = [scene for scene in ordered if scene.id == start_scene_id]
+        if not ordered:
+            raise ProjectStoreError("The selected scene could not be found.")
+    elif kind == "from_here":
+        if not start_scene_id:
+            raise ProjectStoreError("Render From Here requires a selected scene.")
+        start_index = next((index for index, scene in enumerate(ordered) if scene.id == start_scene_id), None)
+        if start_index is None:
+            raise ProjectStoreError("The selected start scene could not be found.")
+        ordered = ordered[start_index:]
+    elif kind != "all":
+        raise ProjectStoreError("The render queue type is invalid.")
+    if not ordered:
+        raise ProjectStoreError("The render queue has no active scenes.")
+    return ordered
 
 
 class H3SequenceCoordinator:
@@ -40,24 +63,7 @@ class H3SequenceCoordinator:
         start_scene_id: str | None,
     ) -> H3RenderRun:
         project = self._store.get_project(project_id)
-        ordered = sorted(project.scenes, key=lambda scene: scene.order)
-        if kind == "scene":
-            if not start_scene_id:
-                raise ProjectStoreError("Render Scene requires a selected scene.")
-            ordered = [scene for scene in ordered if scene.id == start_scene_id]
-            if not ordered:
-                raise ProjectStoreError("The selected scene could not be found.")
-        elif kind == "from_here":
-            if not start_scene_id:
-                raise ProjectStoreError("Render From Here requires a selected scene.")
-            start_index = next((index for index, scene in enumerate(ordered) if scene.id == start_scene_id), None)
-            if start_index is None:
-                raise ProjectStoreError("The selected start scene could not be found.")
-            ordered = ordered[start_index:]
-        elif kind != "all":
-            raise ProjectStoreError("The render queue type is invalid.")
-        if not ordered:
-            raise ProjectStoreError("The render queue has no active scenes.")
+        ordered = resolve_sequence_scenes(project, kind=kind, start_scene_id=start_scene_id)
 
         run_id = uuid.uuid4().hex
         run = H3RenderRun(

@@ -60,7 +60,7 @@ from services.comfyui_runtime_probe import ComfyUIRuntimeProbe
 from server_utils.loopback_url import require_loopback_http_url
 from services.h3_project_store import H3ProjectStore, ProjectStoreError
 from services.h3_continuity import ContinuityError, H3ContinuityExtractor, previous_scene, selected_completed_version
-from services.h3_sequence import H3SequenceCoordinator
+from services.h3_sequence import H3SequenceCoordinator, resolve_sequence_scenes
 from services.h3_audio_guidance import H3AudioGuidance, compose_h3_prompt
 from services.h3_rtx_vsr_upscale import ComfyUIRtxVsrUpscaler
 from services.h3_ollama_prompt_assistant import OllamaPromptAssistant, OllamaPromptAssistantError
@@ -521,9 +521,17 @@ class ComfyUIMiniMaxH3Handler:
 
     def start_sequence(self, project_id: str, request: H3SequenceStartRequest) -> H3RenderRun:
         project = self._project_store.get_project(project_id)
-        if project.workflow_profile_id != "minimax_h3_image_to_video":
+        try:
+            queued_scenes = resolve_sequence_scenes(project, kind=request.kind, start_scene_id=request.start_scene_id)
+        except ProjectStoreError as exc:
+            raise HTTPError(422, str(exc), code="H3_SEQUENCE_ERROR") from exc
+        # Scene generation contracts, not the project creation profile or the
+        # continuity source profile, control the render queue. A prompt-only/T2V
+        # source may legitimately transition its next scene to a verified I2V
+        # profile after continuity extraction.
+        if any(scene.workflow_profile_id != "minimax_h3_image_to_video" for scene in queued_scenes):
             raise HTTPError(422, "This workflow profile is not verified for local rendering.", code="H3_PROFILE_NOT_READY")
-        status = self.get_status(request.base_url)
+        status = self.get_status(request.base_url, "minimax_h3_image_to_video")
         if status.status != "connected" or not status.workflow_contract_valid:
             message = status.errors[0] if status.errors else "The local ComfyUI runtime is unavailable or incompatible."
             raise HTTPError(422, message, code="H3_SEQUENCE_RUNTIME_ERROR")
