@@ -466,6 +466,8 @@ class H3PromptAssistantStatusResponse(BaseModel):
     selected_model: str | None = None
     selected_model_available: bool = False
     vision_capable: bool = False
+    model_state: Literal["cold", "warming", "warm", "unknown"] = "unknown"
+    model_vram_bytes: int | None = Field(default=None, ge=0)
     message: str
 
 
@@ -496,6 +498,7 @@ class H3PromptAssistantRequest(BaseModel):
     no_speech: bool = False
     no_music: bool = False
     custom_audio_instruction: str = Field(default="", max_length=500)
+    request_id: str | None = Field(default=None, min_length=1, max_length=120)
 
 
 class H3PromptAssistantResponse(BaseModel):
@@ -505,6 +508,8 @@ class H3PromptAssistantResponse(BaseModel):
     model: str
     vision_context: Literal["used", "not_available"]
     message: str
+    request_id: str | None = None
+    elapsed_seconds: float = Field(ge=0)
 
 
 class H3NextScenePromptRequest(BaseModel):
@@ -512,6 +517,7 @@ class H3NextScenePromptRequest(BaseModel):
     endpoint: str = "http://127.0.0.1:11434"
     model: str = Field(min_length=1, max_length=300)
     current_user_instruction: str = Field(min_length=1, max_length=12000)
+    request_id: str | None = Field(default=None, min_length=1, max_length=120)
 
 
 class H3NextScenePromptResponse(BaseModel):
@@ -524,6 +530,8 @@ class H3NextScenePromptResponse(BaseModel):
     source_render_version_id: str
     continuity_artifact_id: str | None = None
     message: str
+    request_id: str | None = None
+    elapsed_seconds: float = Field(ge=0)
 
 
 class H3NextSceneSuggestionsResponse(BaseModel):
@@ -531,6 +539,10 @@ class H3NextSceneSuggestionsResponse(BaseModel):
     options: list[str] = Field(min_length=3, max_length=3)
     source_scene_id: str
     source_render_version_id: str
+    provider: Literal["ollama", "deterministic_local"]
+    message: str
+    request_id: str | None = None
+    elapsed_seconds: float = Field(ge=0)
 
 
 class H3WorkflowProfileInstallRequest(BaseModel):

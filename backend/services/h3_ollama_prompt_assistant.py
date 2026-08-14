@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import json
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,17 +25,38 @@ class OllamaSuggestion:
     suggestion: str
     vision_context: str
     raw_response: dict[str, object]
+    elapsed_seconds: float
+    response_metadata: dict[str, int | str | bool | None]
 
 
 class OllamaPromptAssistant:
     """Small provider boundary; all requests are restricted to a loopback Ollama API."""
 
-    timeout_seconds = 45
+    timeout_seconds = 120
+    keep_alive = "30m"
 
     @staticmethod
     def _clean_suggestion(value: str) -> str:
         """Never surface local model reasoning blocks in the Director prompt preview."""
         return re.sub(r"<think>.*?</think>\s*", "", value, flags=re.IGNORECASE | re.DOTALL).strip()
+
+    @classmethod
+    def _visible_content(cls, payload: object) -> str:
+        """Accept Ollama's non-stream chat shape without ever exposing `thinking`."""
+        if not isinstance(payload, dict):
+            raise OllamaPromptAssistantError("Local Ollama returned an invalid response payload.")
+        message = payload.get("message")
+        content = message.get("content") if isinstance(message, dict) else payload.get("response")
+        if not isinstance(content, str):
+            raise OllamaPromptAssistantError("Local Ollama returned no usable prompt text.")
+        visible = cls._clean_suggestion(content)
+        if not visible:
+            raise OllamaPromptAssistantError("Local Ollama returned no usable prompt text.")
+        return visible
+
+    @staticmethod
+    def _metadata(payload: dict[str, object]) -> dict[str, int | str | bool | None]:
+        return {key: payload.get(key) if isinstance(payload.get(key), (int, str, bool)) else None for key in ("model", "done", "done_reason", "total_duration", "load_duration", "prompt_eval_count", "prompt_eval_duration", "eval_count", "eval_duration")}
 
     @staticmethod
     def _endpoint(endpoint: str) -> str:
@@ -57,6 +80,21 @@ class OllamaPromptAssistant:
         capabilities = payload.get("capabilities", []) if isinstance(payload, dict) else []
         return isinstance(capabilities, list) and "vision" in capabilities
 
+    @staticmethod
+    def _running_model(endpoint: str, model: str | None) -> tuple[bool, int | None]:
+        if not model:
+            return False, None
+        try:
+            payload = requests.get(f"{endpoint}/api/ps", timeout=5).json()
+            models = payload.get("models", []) if isinstance(payload, dict) else []
+            for item in models:
+                if isinstance(item, dict) and item.get("name") == model:
+                    vram = item.get("size_vram")
+                    return True, vram if isinstance(vram, int) and vram >= 0 else None
+        except (requests.RequestException, ValueError, json.JSONDecodeError):
+            pass
+        return False, None
+
     def status(self, endpoint: str, selected_model: str | None) -> H3PromptAssistantStatusResponse:
         try:
             endpoint = self._endpoint(endpoint)
@@ -70,7 +108,33 @@ class OllamaPromptAssistant:
             return H3PromptAssistantStatusResponse(status="unavailable", endpoint=endpoint, models=[], message="Local Ollama has no installed models.")
         vision = self._vision_capable(endpoint, selected_model) if selected_model else False
         models = [item.model_copy(update={"vision_capable": item.name == selected_model and vision}) for item in models]
-        return H3PromptAssistantStatusResponse(status="ready", endpoint=endpoint, models=models, selected_model=selected_model, selected_model_available=selected is not None, vision_capable=vision, message="Local Ollama is ready." if selected else "Choose an installed local Ollama model.")
+        warm, vram = self._running_model(endpoint, selected_model)
+        return H3PromptAssistantStatusResponse(status="ready", endpoint=endpoint, models=models, selected_model=selected_model, selected_model_available=selected is not None, vision_capable=vision, model_state="warm" if warm else "cold", model_vram_bytes=vram, message=("Local Ollama and the selected model are ready." if warm else "Local Ollama is ready; the selected model is not loaded yet.") if selected else "Choose an installed local Ollama model.")
+
+    def warm(self, endpoint: str, model: str) -> H3PromptAssistantStatusResponse:
+        endpoint = self._endpoint(endpoint)
+        status = self.status(endpoint, model)
+        if status.status != "ready" or not status.selected_model_available:
+            raise OllamaPromptAssistantError(status.message)
+        try:
+            response = requests.post(f"{endpoint}/api/generate", json={"model": model, "prompt": "", "stream": False, "keep_alive": self.keep_alive}, timeout=self.timeout_seconds)
+            response.raise_for_status()
+        except requests.Timeout as exc:
+            raise OllamaPromptAssistantError("Local Ollama timed out while loading the selected model.") from exc
+        except requests.RequestException as exc:
+            raise OllamaPromptAssistantError("Local Ollama could not load the selected model.") from exc
+        result = self.status(endpoint, model)
+        return result.model_copy(update={"model_state": "warm" if result.model_state == "warm" else "unknown", "message": "Local Ollama model warmup completed." if result.model_state == "warm" else "Local Ollama accepted the model warmup request."})
+
+    def release(self, endpoint: str, model: str) -> H3PromptAssistantStatusResponse:
+        endpoint = self._endpoint(endpoint)
+        try:
+            response = requests.post(f"{endpoint}/api/generate", json={"model": model, "prompt": "", "stream": False, "keep_alive": 0}, timeout=15)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise OllamaPromptAssistantError("Local Ollama could not release the selected model before video rendering.") from exc
+        result = self.status(endpoint, model)
+        return result.model_copy(update={"model_state": "cold", "message": "Local Ollama model was released; the local server remains running."})
 
     @staticmethod
     def _instruction(request: H3PromptAssistantRequest) -> str:
@@ -92,6 +156,7 @@ class OllamaPromptAssistant:
         )
 
     def improve(self, request: H3PromptAssistantRequest) -> OllamaSuggestion:
+        started = time.perf_counter()
         endpoint = self._endpoint(request.endpoint)
         status = self.status(endpoint, request.model)
         if status.status != "ready" or not status.selected_model_available:
@@ -108,21 +173,19 @@ class OllamaPromptAssistant:
         try:
             response = requests.post(
                 f"{endpoint}/api/chat",
-                json={"model": request.model, "stream": False, "messages": [{"role": "system", "content": self._instruction(request)}, {"role": "user", "content": request.raw_prompt, "images": images}]},
+                json={"model": request.model, "stream": False, "keep_alive": self.keep_alive, "messages": [{"role": "system", "content": self._instruction(request)}, {"role": "user", "content": request.raw_prompt, "images": images}]},
                 timeout=self.timeout_seconds,
             )
             response.raise_for_status()
             payload = response.json()
-            suggestion = payload.get("message", {}).get("content", "") if isinstance(payload, dict) else ""
+            suggestion = self._visible_content(payload)
         except requests.Timeout as exc:
             raise OllamaPromptAssistantError("Local Ollama timed out while improving the prompt.") from exc
         except requests.RequestException as exc:
             raise OllamaPromptAssistantError("Local Ollama could not improve the prompt.") from exc
-        if not isinstance(suggestion, str) or not self._clean_suggestion(suggestion):
-            raise OllamaPromptAssistantError("Local Ollama returned no prompt suggestion.")
         # Apply authoritative local audio rules after model output so they cannot be weakened.
         protected = compose_h3_prompt(self._clean_suggestion(suggestion), H3AudioGuidance(
             mode=request.audio_mode, no_speech=request.no_speech, no_music=request.no_music,
             custom_instruction=request.custom_audio_instruction,
         ))
-        return OllamaSuggestion(suggestion=protected, vision_context=vision, raw_response=payload)
+        return OllamaSuggestion(suggestion=protected, vision_context=vision, raw_response=payload, elapsed_seconds=time.perf_counter() - started, response_metadata=self._metadata(payload))

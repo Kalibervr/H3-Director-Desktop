@@ -85,13 +85,21 @@ def route_h3_prompt_assistant_improve(
 ) -> H3PromptAssistantResponse:
     return handler.comfyui_minimax_h3.improve_prompt(request)
 
+@router.post("/prompt-assistant/warm", response_model=H3PromptAssistantStatusResponse)
+def route_h3_prompt_assistant_warm(payload: dict[str, str] = Body(...), handler: AppHandler = Depends(get_state_service)) -> H3PromptAssistantStatusResponse:
+    return handler.comfyui_minimax_h3.warm_prompt_assistant(payload.get("endpoint", "http://127.0.0.1:11434"), payload.get("model", ""))
+
+@router.post("/prompt-assistant/release", response_model=H3PromptAssistantStatusResponse)
+def route_h3_prompt_assistant_release(payload: dict[str, str] = Body(...), handler: AppHandler = Depends(get_state_service)) -> H3PromptAssistantStatusResponse:
+    return handler.comfyui_minimax_h3.release_prompt_assistant(payload.get("endpoint", "http://127.0.0.1:11434"), payload.get("model", ""))
+
 @router.post("/projects/{project_id}/scenes/{scene_id}/prompt-assistant/develop-next", response_model=H3NextScenePromptResponse)
 def route_develop_next(project_id: str, scene_id: str, request: H3NextScenePromptRequest, handler: AppHandler = Depends(get_state_service)) -> H3NextScenePromptResponse:
     return handler.comfyui_minimax_h3.develop_next_scene(project_id, scene_id, request)
 
-@router.get("/projects/{project_id}/scenes/{scene_id}/prompt-assistant/suggest-next", response_model=H3NextSceneSuggestionsResponse)
-def route_suggest_next(project_id: str, scene_id: str, handler: AppHandler = Depends(get_state_service)) -> H3NextSceneSuggestionsResponse:
-    return handler.comfyui_minimax_h3.suggest_next_scene(project_id, scene_id)
+@router.post("/projects/{project_id}/scenes/{scene_id}/prompt-assistant/suggest-next", response_model=H3NextSceneSuggestionsResponse)
+def route_suggest_next(project_id: str, scene_id: str, request: H3NextScenePromptRequest, handler: AppHandler = Depends(get_state_service)) -> H3NextSceneSuggestionsResponse:
+    return handler.comfyui_minimax_h3.suggest_next_scene(project_id, scene_id, request)
 
 
 @router.post("/workflow-profiles/install", response_model=H3WorkflowProfileInstallResponse)

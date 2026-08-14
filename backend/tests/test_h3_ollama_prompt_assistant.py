@@ -65,3 +65,27 @@ def test_reasoning_blocks_are_never_returned_to_director(status: Mock, post: Moc
     result = OllamaPromptAssistant().improve(request())
     assert "internal reasoning" not in result.suggestion
     assert result.suggestion.startswith("A cyclist turns")
+
+
+@patch("services.h3_ollama_prompt_assistant.requests.post")
+@patch("services.h3_ollama_prompt_assistant.OllamaPromptAssistant.status")
+def test_qwen_thinking_field_does_not_hide_visible_content(status: Mock, post: Mock) -> None:
+    status.return_value = type("Status", (), {"status": "ready", "selected_model_available": True, "vision_capable": False, "message": "ready"})()
+    post.return_value = response({"model": "qwen3:4b", "done": True, "message": {"content": "A cyclist turns left.", "thinking": "private reasoning"}, "load_duration": 123})
+    result = OllamaPromptAssistant().improve(request())
+    assert result.suggestion.startswith("A cyclist turns left")
+    assert "private reasoning" not in result.suggestion
+    assert result.response_metadata["load_duration"] == 123
+
+
+@patch("services.h3_ollama_prompt_assistant.requests.post")
+@patch("services.h3_ollama_prompt_assistant.OllamaPromptAssistant.status")
+def test_empty_visible_content_is_a_visible_provider_error(status: Mock, post: Mock) -> None:
+    status.return_value = type("Status", (), {"status": "ready", "selected_model_available": True, "vision_capable": False, "message": "ready"})()
+    post.return_value = response({"model": "qwen3:4b", "done": True, "message": {"content": "", "thinking": "only reasoning"}})
+    try:
+        OllamaPromptAssistant().improve(request())
+    except OllamaPromptAssistantError as exc:
+        assert "no usable prompt text" in str(exc)
+    else:
+        raise AssertionError("expected an explicit empty-output failure")

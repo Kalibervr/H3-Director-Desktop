@@ -178,8 +178,8 @@ export interface H3Project {
   continuity_memory: { entries: Array<{ scene_id: string; render_version_id: string; summary: string; current_state: string; audio_summary: string }> }
 }
 
-export interface H3NextScenePromptResult { provider: 'ollama' | 'deterministic_local'; developed_prompt: string; updated_continuity_summary: string; next_scene_summary: string; source_scene_id: string; source_render_version_id: string; continuity_artifact_id: string | null; message: string }
-export interface H3NextSceneSuggestions { options: string[]; source_scene_id: string; source_render_version_id: string }
+export interface H3NextScenePromptResult { provider: 'ollama' | 'deterministic_local'; developed_prompt: string; updated_continuity_summary: string; next_scene_summary: string; source_scene_id: string; source_render_version_id: string; continuity_artifact_id: string | null; message: string; request_id: string | null }
+export interface H3NextSceneSuggestions { options: string[]; source_scene_id: string; source_render_version_id: string; provider: 'ollama' | 'deterministic_local'; message: string; request_id: string | null }
 
 async function readJson<T>(response: Response): Promise<T> {
   const payload = await response.json() as T | { message?: string }
@@ -235,11 +235,11 @@ export async function continueH3FromPrevious(projectId: string, sceneId: string)
   return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/continue-from-previous`, { method: 'POST' }))
 }
 
-export async function developH3NextScene(projectId: string, sceneId: string, endpoint: string, model: string, currentUserInstruction: string): Promise<H3NextScenePromptResult> {
-  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/prompt-assistant/develop-next`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint, model, current_user_instruction: currentUserInstruction }) }))
+export async function developH3NextScene(projectId: string, sceneId: string, endpoint: string, model: string, currentUserInstruction: string, requestId: string): Promise<H3NextScenePromptResult> {
+  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/prompt-assistant/develop-next`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint, model, current_user_instruction: currentUserInstruction, request_id: requestId }) }))
 }
-export async function suggestH3NextScene(projectId: string, sceneId: string): Promise<H3NextSceneSuggestions> {
-  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/prompt-assistant/suggest-next`))
+export async function suggestH3NextScene(projectId: string, sceneId: string, endpoint: string, model: string, requestId: string): Promise<H3NextSceneSuggestions> {
+  return readJson(await backendFetch(`/api/comfyui/minimax-h3/projects/${encodeURIComponent(projectId)}/scenes/${encodeURIComponent(sceneId)}/prompt-assistant/suggest-next`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint, model, current_user_instruction: 'Suggest the next scene action.', request_id: requestId }) }))
 }
 
 export async function getH3Project(projectId: string): Promise<H3Project> {

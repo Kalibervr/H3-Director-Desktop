@@ -11,9 +11,11 @@ import json
 import os
 import tempfile
 import time
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 from api_types import H3PromptAssistantRequest
 from services.h3_ollama_prompt_assistant import OllamaPromptAssistant
 
@@ -39,12 +41,12 @@ def main() -> int:
     args = parser.parse_args()
     request = H3PromptAssistantRequest(
         endpoint="http://127.0.0.1:11434", model="qwen3:4b",
-        raw_prompt="She continues walking and turns into a side street.",
-        scene_number=2, scene_name="Scene 02", project_name="Ollama lifecycle validation",
+        raw_prompt="enters the code and opens the door",
+        scene_number=2, scene_name="Apartment entrance", project_name="Ollama lifecycle validation",
         sequence_mode="continuous_sequence", scene_mode="continue_previous",
-        previous_scene_number=1, previous_scene_name="Scene 01",
-        previous_scene_prompt="A woman walks through a rainy city street at night.",
-        aspect_ratio="16:9 (Widescreen)", width=1280, height=704, duration_seconds=5,
+        previous_scene_number=1, previous_scene_name="Rainy city street",
+        previous_scene_prompt="A cinematic rain-soaked city street at night. A lone figure has reached the entrance to an apartment building. Wet reflective pavement. Natural ambience.",
+        aspect_ratio="1:1 (Square)", width=640, height=640, duration_seconds=5,
         fps=24, audio_mode="natural_ambience", no_speech=True, no_music=True,
     )
     started = time.monotonic()
@@ -57,7 +59,7 @@ def main() -> int:
         payload.update({
             "ok": True, "elapsed_seconds": round(time.monotonic() - started, 3),
             "suggestion": result.suggestion, "vision_context": result.vision_context,
-            "fallback_used": False,
+            "fallback_used": False, "response_metadata": result.response_metadata,
         })
     except Exception as exc:  # Persist an exact bounded diagnostic before exit.
         payload.update({"ok": False, "elapsed_seconds": round(time.monotonic() - started, 3), "error": str(exc)})

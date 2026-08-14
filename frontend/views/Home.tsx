@@ -4,7 +4,7 @@ import {
   ChevronDown, ChevronLeft, ChevronRight, Loader2, Plus, RotateCcw, Sparkles, Square,
 } from 'lucide-react'
 import { SceneStoryboard } from '../components/SceneStoryboard'
-import { DirectorControlsSidebar } from '../components/DirectorControlsSidebar'
+import { DirectorControlsSidebar, type PromptAssistantUiState } from '../components/DirectorControlsSidebar'
 import { useProjects } from '../contexts/ProjectContext'
 import { useView } from '../contexts/ViewContext'
 import { pathToFileUrl } from '../lib/file-url'
@@ -12,7 +12,7 @@ import { buildH3EditorProject, getH3EditorUpdates, h3EditorProjectId, refreshH3E
 import { readProject, readProjectIds, writeProject, writeProjectIds } from '../lib/project-storage'
 import { getH3RuntimeStatus, type ComfyUIStatus } from '../lib/h3-generation'
 import { composeH3AudioPrompt, h3AudioSummary } from '../lib/h3-audio-guidance'
-import { getOllamaStatus, localPromptAssistant, OllamaH3PromptAssistant, type H3OllamaStatus } from '../lib/h3-prompt-assistant'
+import { getOllamaStatus, localPromptAssistant, OllamaH3PromptAssistant, releaseH3PromptAssistant, warmH3PromptAssistant, type H3OllamaStatus } from '../lib/h3-prompt-assistant'
 import { H3_WORKFLOW_PROFILES, LTX_2_5_OFFICIAL_MODEL_PAGE, profileRuntimeStatus, workflowProfileRegistry } from '../lib/h3-workflow-profiles'
 import { WorkflowRuntimeCenter } from '../components/WorkflowRuntimeCenter'
 import { RTX_VSR_SETUP_REQUIRED, createUpscaleVariantPlan } from '../lib/h3-upscale'
@@ -140,6 +140,7 @@ export function Home() {
   const [upscaleAvailability, setUpscaleAvailability] = useState<H3UpscaleAvailability>(RTX_VSR_SETUP_REQUIRED)
   const [upscaling, setUpscaling] = useState(false)
   const [selectedUpscaleVariantId, setSelectedUpscaleVariantId] = useState<string | null>(null)
+  const [promptAssistant, setPromptAssistant] = useState<PromptAssistantUiState>({ status: 'idle' })
   const [promptAssistantMessage, setPromptAssistantMessage] = useState<string | null>(null)
   const [promptSuggestion, setPromptSuggestion] = useState<string | null>(null)
   const [promptAssistantBusy, setPromptAssistantBusy] = useState(false)
@@ -149,6 +150,8 @@ export function Home() {
   const saveTimer = useRef<number | null>(null)
   const previewVideoRef = useRef<HTMLVideoElement | null>(null)
   const pendingSave = useRef<{ projectId: string; sceneId: string; changes: Partial<H3Scene> } | null>(null)
+  const activePromptAssistantRequest = useRef<string | null>(null)
+  const ollamaReleasedForRender = useRef(false)
   const scene = selectedScene(project)
   const selectedWorkflowProfile = scene ? workflowProfileRegistry.get(scene.workflow_profile_id) : null
   const selectedWorkflowMode = selectedWorkflowProfile && scene ? workflowProfileRegistry.mode(scene.workflow_profile_id, scene.workflow_mode) : null
@@ -332,12 +335,29 @@ export function Home() {
   }, [runtimeConfig?.ollamaModel])
 
   useEffect(() => {
+    if (ollamaLifecycle?.state !== 'ready' || !runtimeConfig?.ollamaModel || runtimeConfig.ollamaKeepWarm === false || ollamaStatus?.model_state === 'warm' || ollamaStatus?.model_state === 'warming') return
+    setOllamaStatus(current => current ? { ...current, model_state: 'warming', message: `Loading ${runtimeConfig.ollamaModel}…` } : current)
+    void warmH3PromptAssistant(ollamaEndpoint, runtimeConfig.ollamaModel).then(setOllamaStatus).catch(() => void getOllamaStatus(ollamaEndpoint, runtimeConfig.ollamaModel).then(setOllamaStatus).catch(() => setOllamaStatus(null)))
+  }, [ollamaLifecycle?.state, runtimeConfig?.ollamaModel, runtimeConfig?.ollamaKeepWarm, ollamaEndpoint, ollamaStatus?.model_state])
+
+  useEffect(() => {
     if (!project || (!activeRun && (!scene || !ACTIVE_STATUSES.includes(scene.status)))) return
     const interval = window.setInterval(() => {
       void getH3Project(project.id).then(replaceProject).catch(() => undefined)
     }, 1_000)
     return () => window.clearInterval(interval)
   }, [project?.id, scene?.id, scene?.status, activeRun?.id])
+
+  useEffect(() => {
+    activePromptAssistantRequest.current = null
+    setPromptAssistant({ status: 'idle' })
+  }, [project?.id, scene?.id])
+
+  useEffect(() => {
+    if (!ollamaReleasedForRender.current || activeRun || ACTIVE_STATUSES.includes(scene?.status ?? 'idle') || !runtimeConfig?.ollamaModel || runtimeConfig.ollamaKeepWarm === false) return
+    ollamaReleasedForRender.current = false
+    void warmH3PromptAssistant(ollamaEndpoint, runtimeConfig.ollamaModel).then(setOllamaStatus).catch(() => undefined)
+  }, [activeRun?.id, scene?.status, runtimeConfig?.ollamaModel, runtimeConfig?.ollamaKeepWarm, ollamaEndpoint])
 
   useEffect(() => () => {
     if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
@@ -465,6 +485,7 @@ export function Home() {
     setRendering(true)
     setWorkspaceError(null)
     try {
+      if (runtimeConfig?.ollamaModel) { ollamaReleasedForRender.current = true; void releaseH3PromptAssistant(ollamaEndpoint, runtimeConfig.ollamaModel).then(setOllamaStatus).catch(() => undefined) }
       await flushPendingSave()
       const saved = await updateH3Scene(project.id, scene.id, {
         prompt: scene.prompt, reference_image: scene.reference_image, reference_fit: scene.reference_fit, aspect_ratio: scene.aspect_ratio, resolution_megapixels: scene.resolution_megapixels, seed: scene.seed,
@@ -509,6 +530,7 @@ export function Home() {
     setSequenceStarting(true)
     setWorkspaceError(null)
     try {
+      if (runtimeConfig?.ollamaModel) { ollamaReleasedForRender.current = true; void releaseH3PromptAssistant(ollamaEndpoint, runtimeConfig.ollamaModel).then(setOllamaStatus).catch(() => undefined) }
       await flushPendingSave()
       const run = await startH3Sequence(project.id, kind, kind === 'from_here' ? scene.id : undefined, managedBaseUrl)
       setSelectedRunId(run.id)
@@ -604,7 +626,11 @@ export function Home() {
     updateSceneLocally({ resolution_megapixels: resolutionMegapixels, width, height })
   }
   const improvePrompt = async () => {
-    if (!scene || !project || promptAssistantBusy) return
+    if (!scene || !project || promptAssistantBusy || activePromptAssistantRequest.current) return
+    const requestId = crypto.randomUUID()
+    activePromptAssistantRequest.current = requestId
+    const startedAt = performance.now()
+    setPromptAssistant({ status: 'running', action: 'improve', message: 'Improving Prompt…' })
     setPromptAssistantBusy(true); setPromptAssistantMessage('Improving prompt…')
     const context = {
       rawPrompt: scene.prompt,
@@ -625,30 +651,41 @@ export function Home() {
       customAudioInstruction: scene.custom_audio_instruction,
       continuityFramePath: continuityArtifact?.image_file,
       referenceImagePath: scene.reference_image ?? undefined,
+      requestId,
     }
     try {
       const canUseOllama = Boolean(runtimeConfig?.ollamaModel && ollamaStatus?.status === 'ready' && ollamaStatus.selected_model_available)
       const result = await (canUseOllama ? new OllamaH3PromptAssistant(ollamaEndpoint, runtimeConfig!.ollamaModel!) : localPromptAssistant).improve(context)
       setPromptAssistantMessage(result.provider === 'ollama' ? `${result.message} Vision context: ${result.visionContext === 'used' ? 'Used' : 'Not available'}.` : result.message)
       setPromptSuggestion(result.suggestion)
+      if (activePromptAssistantRequest.current === requestId) { activePromptAssistantRequest.current = null; setPromptAssistant({ status: 'completed', action: 'improve', result: result.suggestion ?? undefined, message: result.message, elapsedSeconds: (performance.now() - startedAt) / 1000 }) }
     } catch (error) {
       setPromptAssistantMessage(`${error instanceof Error ? error.message : 'Local Ollama failed.'} Basic local suggestion is available.`)
       setPromptSuggestion((await localPromptAssistant.improve(context)).suggestion)
+      if (activePromptAssistantRequest.current === requestId) { activePromptAssistantRequest.current = null; setPromptAssistant({ status: 'failed', action: 'improve', error: error instanceof Error ? error.message : 'Local Ollama failed.', elapsedSeconds: (performance.now() - startedAt) / 1000 }) }
     } finally { setPromptAssistantBusy(false) }
   }
 
   const developNextScene = async () => {
-    if (!project || !scene || promptAssistantBusy || !scene.prompt.trim()) return
+    if (!project || !scene || promptAssistantBusy || !scene.prompt.trim() || activePromptAssistantRequest.current) return
+    const requestId = crypto.randomUUID()
+    activePromptAssistantRequest.current = requestId
+    const startedAt = performance.now()
+    setPromptAssistant({ status: 'running', action: 'develop', message: 'Developing Next Scene…' })
     setPromptAssistantBusy(true); setPromptAssistantMessage('Developing next scene…')
-    try { const result = await developH3NextScene(project.id, scene.id, ollamaEndpoint, runtimeConfig?.ollamaModel || 'local', scene.prompt); setPromptSuggestion(result.developed_prompt); setPromptAssistantMessage(result.message) }
-    catch (error) { setPromptAssistantMessage(error instanceof Error ? error.message : 'Next-scene development failed.') }
+    try { const instruction = promptAssistant.selectedInstruction ?? scene.prompt; const result = await developH3NextScene(project.id, scene.id, ollamaEndpoint, runtimeConfig?.ollamaModel || 'local', instruction, requestId); setPromptSuggestion(result.developed_prompt); setPromptAssistantMessage(result.message); if (activePromptAssistantRequest.current === requestId) { activePromptAssistantRequest.current = null; setPromptAssistant({ status: 'completed', action: 'develop', result: result.developed_prompt, message: result.message, elapsedSeconds: (performance.now() - startedAt) / 1000 }) } }
+    catch (error) { setPromptAssistantMessage(error instanceof Error ? error.message : 'Next-scene development failed.'); if (activePromptAssistantRequest.current === requestId) { activePromptAssistantRequest.current = null; setPromptAssistant({ status: 'failed', action: 'develop', error: error instanceof Error ? error.message : 'Next-scene development failed.', elapsedSeconds: (performance.now() - startedAt) / 1000 }) } }
     finally { setPromptAssistantBusy(false) }
   }
   const suggestNextScene = async () => {
-    if (!project || !scene || promptAssistantBusy) return
+    if (!project || !scene || promptAssistantBusy || activePromptAssistantRequest.current) return
+    const requestId = crypto.randomUUID()
+    activePromptAssistantRequest.current = requestId
+    const startedAt = performance.now()
+    setPromptAssistant({ status: 'running', action: 'suggest', message: 'Suggesting Next Scene…' })
     setPromptAssistantBusy(true); setPromptAssistantMessage('Suggesting next actions…')
-    try { const result = await suggestH3NextScene(project.id, scene.id); setPromptSuggestion(result.options.join('\n')); setPromptAssistantMessage('Choose an action, then use Develop Next Scene.') }
-    catch (error) { setPromptAssistantMessage(error instanceof Error ? error.message : 'Suggestions are unavailable.') }
+    try { const result = await suggestH3NextScene(project.id, scene.id, ollamaEndpoint, runtimeConfig?.ollamaModel || 'local', requestId); setPromptSuggestion(result.options.join('\n')); setPromptAssistantMessage(result.message); if (activePromptAssistantRequest.current === requestId) { activePromptAssistantRequest.current = null; setPromptAssistant({ status: 'completed', action: 'suggest', suggestions: result.options, message: result.message, elapsedSeconds: (performance.now() - startedAt) / 1000 }) } }
+    catch (error) { setPromptAssistantMessage(error instanceof Error ? error.message : 'Suggestions are unavailable.'); if (activePromptAssistantRequest.current === requestId) { activePromptAssistantRequest.current = null; setPromptAssistant({ status: 'failed', action: 'suggest', error: error instanceof Error ? error.message : 'Suggestions are unavailable.', elapsedSeconds: (performance.now() - startedAt) / 1000 }) } }
     finally { setPromptAssistantBusy(false) }
   }
 
@@ -714,8 +751,16 @@ export function Home() {
         onOpenAdvanced={() => setShowWorkflowCenter(true)}
         onSelectUpscale={setSelectedUpscaleVariantId}
         onUpscale={() => void upscaleActiveVersion()}
+        keepPromptAssistantReady={runtimeConfig?.ollamaKeepWarm !== false}
+        onKeepPromptAssistantReadyChange={value => { if (runtimeConfig) setRuntimeConfig({ ...runtimeConfig, ollamaKeepWarm: value }) }}
         ollamaStatus={compactOllamaStatus}
         ltxReadiness={ltxReadiness}
+        promptAssistant={promptAssistant}
+        onCancelPromptAssistant={() => { activePromptAssistantRequest.current = null; setPromptAssistant(current => ({ ...current, status: 'cancelled', message: 'The request was cancelled. Any late local response is ignored.' })) }}
+        onDismissPromptAssistant={() => setPromptAssistant({ status: 'idle' })}
+        onRetryPromptAssistant={() => { if (promptAssistant.action === 'improve') void improvePrompt(); else if (promptAssistant.action === 'develop') void developNextScene(); else if (promptAssistant.action === 'suggest') void suggestNextScene() }}
+        onApplyPromptAssistantResult={() => { if (promptAssistant.result) updateSceneLocally({ prompt: promptAssistant.result }); setPromptAssistant({ status: 'idle' }) }}
+        onSelectNextSceneSuggestion={value => setPromptAssistant(current => ({ ...current, selectedInstruction: value, message: 'Action staged. Click Develop Next Scene to expand it with sequence context.' }))}
       />
       {/* Legacy sidebar retained in source history while the extracted component above is the sole rendered control surface.
       <aside className="row-span-2 min-h-0 overflow-y-auto border-l border-white/10 bg-[#0b0e13] p-5">

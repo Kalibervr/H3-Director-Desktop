@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, TypeVar
@@ -272,7 +273,7 @@ class ComfyUIMiniMaxH3Handler:
             result = OllamaPromptAssistant().improve(request)
             return H3PromptAssistantResponse(
                 suggestion=result.suggestion, model=request.model, vision_context=result.vision_context,
-                message="AI-enhanced local suggestion from Local Ollama.",
+                message="AI-enhanced local suggestion from Local Ollama.", request_id=request.request_id, elapsed_seconds=result.elapsed_seconds,
             )
         except (OllamaPromptAssistantError, ValueError) as exc:
             raise HTTPError(422, str(exc), code="H3_OLLAMA_PROMPT_ERROR") from exc
@@ -292,16 +293,41 @@ class ComfyUIMiniMaxH3Handler:
         history = " ".join(entry.summary for entry in project.continuity_memory.entries[-3:])
         context = H3PromptAssistantRequest(endpoint=request.endpoint, model=request.model, raw_prompt=request.current_user_instruction, scene_number=target.order, scene_name=target.name, scene_mode="continue_previous", duration_seconds=target.duration_seconds, aspect_ratio=target.aspect_ratio, width=target.width, height=target.height, fps=target.fps, project_name=project.name, sequence_mode=project.sequence_mode, previous_scene_number=source.order, previous_scene_name=source.name, previous_scene_prompt=history or source.prompt, previous_final_prompt=version.final_submitted_prompt or version.final_prompt, continuity_source_version_id=version.id, audio_mode=target.audio_mode, no_speech=target.no_speech, no_music=target.no_music, custom_audio_instruction=target.custom_audio_instruction)
         try:
-            developed = OllamaPromptAssistant().improve(context).suggestion; provider = "ollama"
+            ollama_result = OllamaPromptAssistant().improve(context); developed = ollama_result.suggestion; elapsed_seconds = ollama_result.elapsed_seconds; provider = "ollama"
         except (OllamaPromptAssistantError, ValueError):
-            developed = f"Continue directly from the supplied frame of the previous scene. {request.current_user_instruction.strip()} Preserve only known subject, location, atmosphere, and audio continuity; advance the action without replaying the prior scene."; provider = "deterministic_local"
+            developed = f"Continue directly from the supplied frame of the previous scene. {request.current_user_instruction.strip()} Preserve only known subject, location, atmosphere, and audio continuity; advance the action without replaying the prior scene."; elapsed_seconds = 0.0; provider = "deterministic_local"
         artifact = target.selected_continuity_artifact_id
-        return H3NextScenePromptResponse(provider=provider, developed_prompt=developed, updated_continuity_summary=request.current_user_instruction.strip(), next_scene_summary=request.current_user_instruction.strip(), source_scene_id=source.id, source_render_version_id=version.id, continuity_artifact_id=artifact, message="Review before applying; this draft is not confirmed continuity.")
+        message = "Review before applying; this draft is not confirmed continuity." if provider == "ollama" else "Local Ollama was unavailable; a deterministic local draft is ready for review."
+        return H3NextScenePromptResponse(provider=provider, developed_prompt=developed, updated_continuity_summary=request.current_user_instruction.strip(), next_scene_summary=request.current_user_instruction.strip(), source_scene_id=source.id, source_render_version_id=version.id, continuity_artifact_id=artifact, message=message, request_id=request.request_id, elapsed_seconds=elapsed_seconds)
 
-    def suggest_next_scene(self, project_id: str, scene_id: str) -> H3NextSceneSuggestionsResponse:
+    def suggest_next_scene(self, project_id: str, scene_id: str, request: H3NextScenePromptRequest) -> H3NextSceneSuggestionsResponse:
         project = self._project_store.get_project(project_id); _, source, version = self._next_scene_source(project, scene_id)
         state = next((entry.current_state for entry in reversed(project.continuity_memory.entries) if entry.scene_id == source.id and entry.render_version_id == version.id), source.prompt[:180])
-        return H3NextSceneSuggestionsResponse(options=[f"Continue from the current moment: {state}", "Pause and react to a new sound or movement nearby.", "Move forward into the next nearby space or action."], source_scene_id=source.id, source_render_version_id=version.id)
+        fallback = [f"Continue from the current moment: {state}", "Pause and react to a new sound or movement nearby.", "Move forward into the next nearby space or action."]
+        try:
+            context = H3PromptAssistantRequest(endpoint=request.endpoint, model=request.model, raw_prompt=("Suggest exactly three concise next-scene actions as three numbered lines. " f"Current continuity state: {state}"), scene_number=source.order + 1, scene_name="Next scene", scene_mode="continue_previous", duration_seconds=5, aspect_ratio="1:1 (Square)", width=640, height=640, fps=24, project_name=project.name, sequence_mode=project.sequence_mode, previous_scene_number=source.order, previous_scene_name=source.name, previous_scene_prompt=state, previous_final_prompt=version.final_submitted_prompt or version.final_prompt, continuity_source_version_id=version.id, audio_mode="natural_ambience", no_speech=True, no_music=True, request_id=request.request_id)
+            ollama_result = OllamaPromptAssistant().improve(context); raw = ollama_result.suggestion; elapsed_seconds = ollama_result.elapsed_seconds
+            lines = [re.sub(r"^\s*(?:\d+[.)]|[-*])\s*", "", line).strip() for line in raw.splitlines()]
+            options = [line for line in lines if line and "no speech" not in line.lower() and "no music" not in line.lower()][:3]
+            if len(options) != 3:
+                options = fallback; provider = "deterministic_local"; message = "Local Ollama returned an incomplete suggestion set; safe local options are shown."
+            else:
+                provider = "ollama"; message = "Three local Ollama suggestions are ready to stage."
+        except (OllamaPromptAssistantError, ValueError):
+            options = fallback; provider = "deterministic_local"; message = "Local Ollama was unavailable; safe local options are shown."; elapsed_seconds = 0.0
+        return H3NextSceneSuggestionsResponse(options=options, source_scene_id=source.id, source_render_version_id=version.id, provider=provider, message=message, request_id=request.request_id, elapsed_seconds=elapsed_seconds)
+
+    def warm_prompt_assistant(self, endpoint: str, model: str) -> H3PromptAssistantStatusResponse:
+        try:
+            return OllamaPromptAssistant().warm(endpoint, model)
+        except (OllamaPromptAssistantError, ValueError) as exc:
+            raise HTTPError(422, str(exc), code="H3_OLLAMA_WARM_ERROR") from exc
+
+    def release_prompt_assistant(self, endpoint: str, model: str) -> H3PromptAssistantStatusResponse:
+        try:
+            return OllamaPromptAssistant().release(endpoint, model)
+        except (OllamaPromptAssistantError, ValueError) as exc:
+            raise HTTPError(422, str(exc), code="H3_OLLAMA_RELEASE_ERROR") from exc
 
     def install_workflow_profile(self, request: H3WorkflowProfileInstallRequest) -> H3WorkflowProfileInstallResponse:
         """Copies only a validated declarative local package into H3 app data."""
