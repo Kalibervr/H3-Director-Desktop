@@ -123,6 +123,10 @@ export function Home() {
   const [customSceneCount, setCustomSceneCount] = useState('')
   const [newProjectSequenceMode, setNewProjectSequenceMode] = useState<H3SequenceMode>('independent_shots')
   const [showNewProject, setShowNewProject] = useState(false)
+  const [renameTarget, setRenameTarget] = useState<H3Project | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [renameError, setRenameError] = useState<string | null>(null)
+  const [renaming, setRenaming] = useState(false)
   const [showWorkflowCenter, setShowWorkflowCenter] = useState(false)
   const [runtimeStatus, setRuntimeStatus] = useState<ComfyUIStatus>('unavailable')
   const [runtimeVersion, setRuntimeVersion] = useState<string | null>(null)
@@ -457,6 +461,40 @@ export function Home() {
     }
   }
 
+  const openRenameProject = (target: H3Project) => {
+    setRenameTarget(target)
+    setRenameValue(target.name)
+    setRenameError(null)
+  }
+
+  const confirmRenameProject = async () => {
+    if (!renameTarget) return
+    const name = renameValue.trim()
+    if (!name) {
+      setRenameError('A project name is required.')
+      return
+    }
+    setRenaming(true)
+    setRenameError(null)
+    try {
+      const renamedProject = await renameH3Project(renameTarget.id, name)
+      setProjects((currentProjects) =>
+        currentProjects
+          .map((projectItem) => (projectItem.id === renamedProject.id ? renamedProject : projectItem))
+          .sort((left, right) => right.updated_at.localeCompare(left.updated_at)),
+      )
+      setProject((currentProject) =>
+        currentProject?.id === renamedProject.id ? renamedProject : currentProject,
+      )
+      setRenameTarget(null)
+      setRenameValue('')
+    } catch (error) {
+      setRenameError(error instanceof Error ? error.message : 'Could not rename project.')
+    } finally {
+      setRenaming(false)
+    }
+  }
+
   const moveScene = (target: H3Scene, direction: -1 | 1) => {
     if (!project) return
     const ids = project.scenes.map(item => item.id)
@@ -715,7 +753,7 @@ export function Home() {
         </div></div>
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-5">
           <div className="mb-3 flex items-center justify-between px-2"><span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Recent Projects</span><button onClick={() => setShowNewProject(true)} aria-label="New Project"><Plus className="h-4 w-4" /></button></div>
-          <div className="space-y-1">{projects.map(item => <div key={item.id} className={`group flex items-center gap-1 rounded-lg ${project?.id === item.id ? 'bg-amber-300/10 text-amber-200' : 'text-zinc-400 hover:bg-white/5'}`}><button onClick={() => void getH3Project(item.id).then(replaceProject)} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left text-sm"><Folder className="h-4 w-4" /><span className="truncate">{item.name}</span></button><details className="relative mr-2"><summary aria-label={`Project actions for ${item.name}`} className="cursor-pointer list-none rounded px-1.5 py-1 text-zinc-500 hover:bg-white/10 hover:text-white">⋯</summary><div className="absolute right-0 z-30 mt-1 w-40 rounded-lg border border-white/10 bg-[#11151c] p-1 text-xs shadow-xl"><button onClick={() => { const name = window.prompt('Rename project', item.name); if (name?.trim()) void renameH3Project(item.id, name).then(replaceProject).catch(error => setWorkspaceError(error instanceof Error ? error.message : 'Project rename failed.')) }} className="block w-full rounded px-2 py-2 text-left hover:bg-white/10">Rename</button><button onClick={() => void window.electronAPI.showItemInFolder({ filePath: item.project_root })} className="block w-full rounded px-2 py-2 text-left hover:bg-white/10">Open Project Folder</button><button onClick={() => { if (!window.confirm(`Move “${item.name}” to H3 Director Trash?`)) return; void deleteH3Project(item.id).then(async () => { const remaining = projects.filter(candidate => candidate.id !== item.id); setProjects(remaining); if (project?.id === item.id) { if (remaining[0]) replaceProject(await getH3Project(remaining[0].id)); else setProject(null) } }).catch(error => setWorkspaceError(error instanceof Error ? error.message : 'Project deletion failed.')) }} className="block w-full rounded px-2 py-2 text-left text-red-300 hover:bg-red-400/10">Delete Project</button></div></details></div>)}</div>
+          <div className="space-y-1">{projects.map(item => <div key={item.id} className={`group flex items-center gap-1 rounded-lg ${project?.id === item.id ? 'bg-amber-300/10 text-amber-200' : 'text-zinc-400 hover:bg-white/5'}`}><button onClick={() => void getH3Project(item.id).then(replaceProject)} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left text-sm"><Folder className="h-4 w-4" /><span className="truncate">{item.name}</span></button><details className="relative mr-2"><summary aria-label={`Project actions for ${item.name}`} className="cursor-pointer list-none rounded px-1.5 py-1 text-zinc-500 hover:bg-white/10 hover:text-white">⋯</summary><div className="absolute right-0 z-30 mt-1 w-40 rounded-lg border border-white/10 bg-[#11151c] p-1 text-xs shadow-xl"><button onClick={() => openRenameProject(item)} className="block w-full rounded px-2 py-2 text-left hover:bg-white/10">Rename</button><button onClick={() => void window.electronAPI.showItemInFolder({ filePath: item.project_root })} className="block w-full rounded px-2 py-2 text-left hover:bg-white/10">Open Project Folder</button><button onClick={() => { if (!window.confirm(`Move “${item.name}” to H3 Director Trash?`)) return; void deleteH3Project(item.id).then(async () => { const remaining = projects.filter(candidate => candidate.id !== item.id); setProjects(remaining); if (project?.id === item.id) { if (remaining[0]) replaceProject(await getH3Project(remaining[0].id)); else setProject(null) } }).catch(error => setWorkspaceError(error instanceof Error ? error.message : 'Project deletion failed.')) }} className="block w-full rounded px-2 py-2 text-left text-red-300 hover:bg-red-400/10">Delete Project</button></div></details></div>)}</div>
           {!projects.length && <p className="px-3 py-4 text-xs leading-5 text-zinc-600">Create a disk-backed local project to begin.</p>}
           <div className="mt-8 px-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Assets</div>
           <button onClick={() => void chooseReferenceImage()} disabled={!scene} className="mt-3 flex w-full items-center gap-3 rounded-lg border border-dashed border-white/10 px-3 py-3 text-left text-xs text-zinc-500 disabled:opacity-30"><ImagePlus className="h-4 w-4" />{scene?.reference_image ? 'Replace reference' : 'Add reference image'}</button>
@@ -825,6 +863,7 @@ export function Home() {
       <SceneStoryboard project={project} statusLabels={STATUS_LABELS} onSelect={target => project && target.id !== project.selected_scene_id && void runSceneOperation(() => selectH3Scene(project.id, target.id))} onAdd={() => project && void runSceneOperation(() => addH3Scene(project.id))} onDuplicate={target => project && void runSceneOperation(() => duplicateH3Scene(project.id, target.id))} onDelete={target => project && void runSceneOperation(() => deleteH3Scene(project.id, target.id))} onMove={moveScene} />
     </div>
     {showNewProject && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"><div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#10141b] p-6"><h2 className="text-lg font-semibold">New Project</h2><p className="mt-1 text-sm text-zinc-500">Creates an app-owned project folder and persisted scene cards.</p><input autoFocus value={newProjectName} onChange={event => setNewProjectName(event.target.value)} placeholder="Project name" className="mt-5 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm outline-none" /><div className="mt-5 text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Scene count</div><div className="mt-2 grid grid-cols-4 gap-2">{[5, 10, 15].map(count => <button key={count} onClick={() => { setNewProjectSceneCount(count); setCustomSceneCount('') }} className={`rounded-lg border px-3 py-2 text-sm ${!customSceneCount && newProjectSceneCount === count ? 'border-amber-300/50 bg-amber-300/10 text-amber-200' : 'border-white/10 text-zinc-500'}`}>{count}</button>)}<input type="number" min="1" max="999" value={customSceneCount} onChange={event => setCustomSceneCount(event.target.value)} placeholder="Custom" aria-label="Custom positive scene count" className="rounded-lg border border-white/10 bg-black/30 px-2 text-center text-sm outline-none" /></div><label className="mt-5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-500">Sequence mode<select value={newProjectSequenceMode} onChange={event => setNewProjectSequenceMode(event.target.value as H3SequenceMode)} className="mt-2 w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm normal-case tracking-normal text-zinc-300"><option value="independent_shots">Independent shots</option><option value="continuous_sequence">Continuous sequence</option></select></label><div className="mt-5 flex justify-end gap-3"><button onClick={() => setShowNewProject(false)} className="px-4 py-2 text-sm text-zinc-500">Cancel</button><button onClick={() => void createProject()} disabled={!newProjectName.trim()} className="rounded-lg bg-amber-300 px-4 py-2 text-sm font-semibold text-zinc-950 disabled:opacity-30">Create Project</button></div></div></div>}
+    {renameTarget && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" onKeyDown={event => { if (event.key === 'Escape' && !renaming) setRenameTarget(null) }}><form onSubmit={event => { event.preventDefault(); void confirmRenameProject() }} className="w-full max-w-md rounded-2xl border border-white/10 bg-[#10141b] p-6"><h2 className="text-lg font-semibold">Rename project</h2><p className="mt-1 text-sm text-zinc-500">The project folder and stable project ID will stay unchanged.</p><input autoFocus value={renameValue} onChange={event => { setRenameValue(event.target.value); setRenameError(null) }} aria-label="Project name" className="mt-5 w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm outline-none" />{renameError && <p className="mt-2 text-sm text-red-300">{renameError}</p>}<div className="mt-5 flex justify-end gap-3"><button type="button" disabled={renaming} onClick={() => setRenameTarget(null)} className="px-4 py-2 text-sm text-zinc-400">Cancel</button><button type="submit" disabled={renaming} className="rounded-lg bg-amber-300 px-4 py-2 text-sm font-semibold text-zinc-950 disabled:opacity-40">{renaming ? 'Renaming…' : 'Rename'}</button></div></form></div>}
     {showWorkflowCenter && <WorkflowRuntimeCenter onClose={() => setShowWorkflowCenter(false)} baseUrl={managedBaseUrl} modelRoot={runtimeConfig?.extraModelPathsConfig} lifecycle={lifecycle} runtimeConfig={runtimeConfig} />}
   </div>
 }
