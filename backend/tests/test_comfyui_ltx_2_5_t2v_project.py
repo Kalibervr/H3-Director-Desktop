@@ -19,7 +19,7 @@ class T2VProvider:
         self.result = result
         self.request: LtxT2VRequest | None = None
 
-    def render(self, *, base_url: str, request: LtxT2VRequest) -> RenderResult:
+    def render(self, *, base_url: str, request: LtxT2VRequest, **_callbacks: object) -> RenderResult:
         assert base_url == "http://127.0.0.1:8190"
         self.request = request
         return self.result

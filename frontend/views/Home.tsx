@@ -732,6 +732,7 @@ export function Home() {
         <section className="relative flex h-[calc(100%-64px)] min-h-[360px] items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl">
           {previewUrl ? activeVersion ? <video ref={previewVideoRef} key={previewUrl} src={previewUrl} controls preload="metadata" className="h-full w-full object-contain" /> : <img src={previewUrl} alt="Selected scene reference" className="h-full w-full object-contain opacity-90" /> : <div className="max-w-sm text-center"><Film className="mx-auto h-10 w-10 text-zinc-700" /><h2 className="mt-5 text-lg text-zinc-300">Your selected render will appear here</h2><p className="mt-2 text-sm text-zinc-600">{promptOnly ? 'Add a prompt to begin.' : 'Create a project and save the scene reference to begin.'}</p></div>}
           <div className="absolute left-4 top-4 rounded-full border border-white/10 bg-black/60 px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] text-zinc-400">Scene preview</div>
+          {activeRun && scene && <div className="absolute left-4 top-14 rounded-xl border border-amber-300/30 bg-black/75 px-4 py-3 text-sm text-zinc-100 shadow-xl"><div className="font-semibold text-amber-100">Rendering Scene {String(scene.order).padStart(2, '0')}</div><div className="mt-1 text-zinc-300">Stage: {activeRun.items.find(item => item.scene_id === scene.id)?.current_phase ?? scene.current_phase ?? 'Preparing'}</div><div className="mt-1 text-zinc-400">Elapsed: {String(Math.max(0, Math.floor((clock - new Date(activeRun.started_at).getTime()) / 60000))).padStart(2, '0')}:{String(Math.max(0, Math.floor((clock - new Date(activeRun.started_at).getTime()) / 1000) % 60)).padStart(2, '0')}</div></div>}
           {scene && <div className={`absolute bottom-4 right-4 rounded-full px-3 py-1.5 text-xs font-semibold ${scene.status === 'failed' ? 'bg-red-400/90 text-red-950' : scene.status === 'complete' ? 'bg-emerald-400/90 text-emerald-950' : 'bg-amber-300/90 text-amber-950'}`}>{STATUS_LABELS[scene.status]}</div>}
         </section>
       </main>
@@ -770,6 +771,9 @@ export function Home() {
         ollamaStatus={compactOllamaStatus}
         ltxReadiness={ltxReadiness}
         continuationLabel={continuationLabel}
+        activeRun={activeRun}
+        clock={clock}
+        onStopRender={() => { if (activeRun) void stopSequence(activeRun) }}
         promptAssistant={promptAssistant}
         onCancelPromptAssistant={() => { activePromptAssistantRequest.current = null; setPromptAssistant(current => ({ ...current, status: 'cancelled', message: 'The request was cancelled. Any late local response is ignored.' })) }}
         onDismissPromptAssistant={() => setPromptAssistant({ status: 'idle' })}

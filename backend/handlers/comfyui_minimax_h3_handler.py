@@ -569,12 +569,15 @@ class ComfyUIMiniMaxH3Handler:
         # continuity source profile, control the render queue. A prompt-only/T2V
         # source may legitimately transition its next scene to a verified I2V
         # profile after continuity extraction.
-        if any(scene.workflow_profile_id != "minimax_h3_image_to_video" for scene in queued_scenes):
+        supported_profiles = {"minimax_h3_image_to_video", "minimax_h3_no_reference", "ltx_2_5_image_to_video", "ltx_2_5_text_to_video"}
+        if any(scene.workflow_profile_id not in supported_profiles for scene in queued_scenes):
             raise HTTPError(422, "This workflow profile is not verified for local rendering.", code="H3_PROFILE_NOT_READY")
-        status = self.get_status(request.base_url, "minimax_h3_image_to_video")
-        if status.status != "connected" or not status.workflow_contract_valid:
-            message = status.errors[0] if status.errors else "The local ComfyUI runtime is unavailable or incompatible."
-            raise HTTPError(422, message, code="H3_SEQUENCE_RUNTIME_ERROR")
+        minimax_scenes = [scene for scene in queued_scenes if scene.workflow_profile_id.startswith("minimax_h3_")]
+        if minimax_scenes:
+            status = self.get_status(request.base_url, minimax_scenes[0].workflow_profile_id)
+            if status.status != "connected" or not status.workflow_contract_valid:
+                message = status.errors[0] if status.errors else "The local ComfyUI runtime is unavailable or incompatible."
+                raise HTTPError(422, message, code="H3_SEQUENCE_RUNTIME_ERROR")
         try:
             return self._sequence.start(
                 project_id,
@@ -673,9 +676,9 @@ class ComfyUIMiniMaxH3Handler:
                 raise ProjectStoreError("The selected scene could not be found.")
             profile_id = scene.workflow_profile_id
             if profile_id == "ltx_2_5_image_to_video":
-                return self._render_ltx_i2v_project_scene(project, scene_id, request)
+                return self._render_ltx_i2v_project_scene(project, scene_id, request, sequence_status_callback, cancel_requested)
             if profile_id == "ltx_2_5_text_to_video":
-                return self._render_ltx_t2v_project_scene(project, scene_id, request)
+                return self._render_ltx_t2v_project_scene(project, scene_id, request, sequence_status_callback, cancel_requested)
             if profile_id == "minimax_h3_no_reference":
                 return self._render_minimax_h3_no_reference_project_scene(project, scene_id, request)
             if profile_id != "minimax_h3_image_to_video":
@@ -709,6 +712,7 @@ class ComfyUIMiniMaxH3Handler:
                     "Decoding": "rendering",
                     "Encoding": "encoding",
                     "Verifying": "verifying",
+                    "Adopting render": "verifying",
                 }.get(phase, "rendering")
                 self._project_store.set_scene_status(
                     project_id, scene_id, status, prompt_id=prompt_id, error=None,
@@ -851,6 +855,8 @@ class ComfyUIMiniMaxH3Handler:
         project: H3Project,
         scene_id: str,
         request: H3ProjectRenderRequest,
+        sequence_status_callback: Callable[[str, str | None, int | None, int | None, str | None], None] | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> H3Project:
         scene = next((item for item in project.scenes if item.id == scene_id), None)
         if scene is None:
@@ -866,25 +872,37 @@ class ComfyUIMiniMaxH3Handler:
             render_root=paths.render_root, ffprobe_path=paths.ffprobe,
         )
         self._project_store.set_scene_status(project.id, scene.id, "rendering", error=None, phase="Submitting LTX 2.5")
+
+        def report(phase: str, prompt_id: str | None, value: int | None, maximum: int | None, diagnostics: str | None) -> None:
+            status = "verifying" if phase in {"Verifying", "Adopting render"} else "rendering"
+            self._project_store.set_scene_status(project.id, scene.id, status, prompt_id=prompt_id, error=None, phase=phase, progress_value=value, progress_max=maximum, diagnostics=diagnostics)
+            if sequence_status_callback:
+                sequence_status_callback(phase, prompt_id, value, maximum, diagnostics)
+
         try:
             input_image = self._resolve_render_input(project, scene)
+            final_prompt = compose_h3_prompt(scene.prompt, H3AudioGuidance(
+                mode=scene.audio_mode, no_speech=scene.no_speech, no_music=scene.no_music,
+                custom_instruction=scene.custom_audio_instruction,
+            ))
             result = provider.render(
                 base_url=request.base_url,
                 request=LtxI2VRequest(
-                    prompt=scene.prompt, input_image=input_image, seed=scene.seed,
+                    prompt=final_prompt, input_image=input_image, seed=scene.seed,
                     prompt_enhance=scene.ltx_prompt_enhance, aspect_ratio=scene.aspect_ratio,
                     resolution_megapixels=scene.resolution_megapixels, width=scene.width, height=scene.height,
                     duration_seconds=scene.duration_seconds, fps=scene.fps, frame_count=scene.frame_count,
                     output_filename_prefix=f"ltx_scene_{scene.order:03d}", reference_fit=scene.reference_fit,
                 ),
+                status_callback=report, cancel_requested=cancel_requested,
             )
             payload = json.loads(result.metadata_file.read_text(encoding="utf-8"))
             number = int(result.render_directory.name.removeprefix("v"))
             version = H3RenderVersion(
                 id=result.render_directory.name, number=number, created_at=str(payload["created_at"]),
                 root=str(result.render_directory), video_file=str(result.output_file), metadata_file=str(result.metadata_file),
-                prompt=scene.prompt, final_prompt=scene.prompt, audio_mode="natural_ambience", no_speech=False,
-                no_music=False, custom_audio_instruction="", input_image_reference=str(input_image),
+                prompt=scene.prompt, final_prompt=final_prompt, audio_mode=scene.audio_mode, no_speech=scene.no_speech,
+                no_music=scene.no_music, custom_audio_instruction=scene.custom_audio_instruction, input_image_reference=str(input_image),
                 seed=scene.seed, width=scene.width, height=scene.height, fps=scene.fps,
                 duration_seconds=scene.duration_seconds, frame_count=result.video.frame_count, prompt_id=result.prompt_id,
                 input_image_sha256=str(payload["input_image_sha256"]), workflow_sha256=str(payload["workflow_sha256"]),
@@ -892,12 +910,19 @@ class ComfyUIMiniMaxH3Handler:
             )
             updated = self._project_store.add_render_version(project.id, scene.id, version)
             return self._project_store.set_scene_status(updated.id, scene.id, "complete", error=None, phase="Complete")
+        except RenderCancelled:
+            self._project_store.set_scene_status(project.id, scene.id, "cancelled", error=None, phase="Cancelled")
+            raise
         except (ProviderError, ProjectStoreError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
             safe_error = str(exc) if isinstance(exc, (ProviderError, ProjectStoreError)) else "The local LTX render could not be adopted safely."
             self._project_store.set_scene_status(project.id, scene.id, "failed", error=safe_error, phase="Failed")
             raise HTTPError(422, safe_error, code="LTX_2_5_I2V_RENDER_FAILED") from exc
 
-    def _render_ltx_t2v_project_scene(self, project: H3Project, scene_id: str, request: H3ProjectRenderRequest) -> H3Project:
+    def _render_ltx_t2v_project_scene(
+        self, project: H3Project, scene_id: str, request: H3ProjectRenderRequest,
+        sequence_status_callback: Callable[[str, str | None, int | None, int | None, str | None], None] | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> H3Project:
         scene = next((item for item in project.scenes if item.id == scene_id), None)
         if scene is None: raise ProjectStoreError("The selected scene could not be found.")
         if not scene.prompt.strip(): raise ProjectStoreError("LTX 2.5 Text-to-Video requires a prompt.")
@@ -907,16 +932,26 @@ class ComfyUIMiniMaxH3Handler:
         paths = resolve_ltx_t2v_runtime_paths(scene_root / "renders")
         provider = ComfyUILtx25T2VProvider(workflow_path=paths.workflow, output_root=paths.comfyui_output, render_root=paths.render_root, ffprobe_path=paths.ffprobe)
         self._project_store.set_scene_status(project.id, scene.id, "rendering", error=None, phase="Submitting LTX 2.5 T2V")
+
+        def report(phase: str, prompt_id: str | None, value: int | None, maximum: int | None, diagnostics: str | None) -> None:
+            status = "verifying" if phase in {"Verifying", "Adopting render"} else "rendering"
+            self._project_store.set_scene_status(project.id, scene.id, status, prompt_id=prompt_id, error=None, phase=phase, progress_value=value, progress_max=maximum, diagnostics=diagnostics)
+            if sequence_status_callback:
+                sequence_status_callback(phase, prompt_id, value, maximum, diagnostics)
+
         try:
-            audio_guidance = compose_h3_prompt(scene.prompt, H3AudioGuidance(
+            final_prompt = compose_h3_prompt(scene.prompt, H3AudioGuidance(
                 mode=scene.audio_mode, no_speech=scene.no_speech,
                 no_music=scene.no_music, custom_instruction=scene.custom_audio_instruction,
             ))
-            result = provider.render(base_url=request.base_url, request=LtxT2VRequest(prompt=scene.prompt, prompt_enhance=scene.ltx_prompt_enhance, seed=scene.seed, aspect_ratio=scene.aspect_ratio, resolution_megapixels=scene.resolution_megapixels, width=scene.width, height=scene.height, duration_seconds=scene.duration_seconds, fps=scene.fps, frame_count=scene.frame_count, output_filename_prefix=f"ltx_t2v_scene_{scene.order:03d}", audio_guidance=audio_guidance))
+            result = provider.render(base_url=request.base_url, request=LtxT2VRequest(prompt=final_prompt, prompt_enhance=scene.ltx_prompt_enhance, seed=scene.seed, aspect_ratio=scene.aspect_ratio, resolution_megapixels=scene.resolution_megapixels, width=scene.width, height=scene.height, duration_seconds=scene.duration_seconds, fps=scene.fps, frame_count=scene.frame_count, output_filename_prefix=f"ltx_t2v_scene_{scene.order:03d}", audio_guidance=final_prompt), status_callback=report, cancel_requested=cancel_requested)
             payload = json.loads(result.metadata_file.read_text(encoding="utf-8")); number = int(result.render_directory.name.removeprefix("v"))
             version = H3RenderVersion(id=result.render_directory.name, number=number, created_at=str(payload["created_at"]), render_started_at=payload.get("render_started_at"), render_completed_at=payload.get("render_completed_at"), render_elapsed_seconds=payload.get("render_elapsed_seconds", payload.get("elapsed_seconds")), root=str(result.render_directory), video_file=str(result.output_file), metadata_file=str(result.metadata_file), prompt=scene.prompt, final_prompt=payload.get("final_submitted_prompt", scene.prompt), raw_user_prompt=payload.get("raw_user_prompt"), improved_prompt=payload.get("improved_prompt"), native_enhanced_prompt=payload.get("native_enhanced_prompt"), final_submitted_prompt=payload.get("final_submitted_prompt"), native_prompt_enhance=payload.get("native_prompt_enhance"), audio_mode=scene.audio_mode, no_speech=scene.no_speech, no_music=scene.no_music, custom_audio_instruction=scene.custom_audio_instruction, input_image_reference="No reference image used", seed=scene.seed, width=scene.width, height=scene.height, fps=scene.fps, duration_seconds=scene.duration_seconds, frame_count=result.video.frame_count, prompt_id=result.prompt_id, input_image_sha256="not-applicable", workflow_sha256=str(payload["workflow_sha256"]), output_sha256=str(payload["output_sha256"]), ffprobe=MiniMaxH3VideoProbeResponse(**result.video.__dict__))
             updated = self._project_store.add_render_version(project.id, scene.id, version)
             return self._project_store.set_scene_status(updated.id, scene.id, "complete", error=None, phase="Complete")
+        except RenderCancelled:
+            self._project_store.set_scene_status(project.id, scene.id, "cancelled", error=None, phase="Cancelled")
+            raise
         except (ProviderError, ProjectStoreError, OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
             safe_error = str(exc) if isinstance(exc, (ProviderError, ProjectStoreError)) else "The local LTX T2V render could not be adopted safely."
             self._project_store.set_scene_status(project.id, scene.id, "failed", error=safe_error, phase="Failed")

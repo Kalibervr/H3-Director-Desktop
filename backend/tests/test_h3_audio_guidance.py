@@ -12,6 +12,16 @@ def test_dialogue_preserves_original_without_inventing_text() -> None:
     assert result == "A woman says hello. No music, no soundtrack, no background score, no singing, no musical elements."
 
 
+def test_audio_guidance_is_idempotent_when_developed_prompt_already_contains_it() -> None:
+    result = compose_h3_prompt(
+        "A quiet elevator interior. Natural environmental ambience appropriate to the scene.",
+        H3AudioGuidance(mode="natural_ambience", no_speech=True, no_music=True),
+    )
+    assert result.count("Natural environmental ambience appropriate to the scene.") == 1
+    assert result.count("No speech, no dialogue, no voices, no vocalizations.") == 1
+    assert result.count("No music, no soundtrack, no background score, no singing, no musical elements.") == 1
+
+
 def test_silent_has_precedence_over_conflicting_audio_options() -> None:
     guidance = H3AudioGuidance(mode="silent", no_speech=False, no_music=False, custom_instruction="birds singing")
     result = compose_h3_prompt("A quiet room.", guidance)

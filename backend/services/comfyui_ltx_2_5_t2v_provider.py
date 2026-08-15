@@ -14,13 +14,13 @@ from dataclasses import dataclass
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, cast
 from urllib.parse import quote, urlsplit
 
 import requests
 
 from server_utils.loopback_url import require_loopback_http_url
-from services.comfyui_minimax_h3_provider import ProviderError, RenderResult, VideoProbe, probe_video
+from services.comfyui_minimax_h3_provider import ProviderError, RenderCancelled, RenderResult, VideoProbe, probe_video
 from services.ltx_2_5_geometry import is_ltx_product_validation_preset
 
 JsonObject = dict[str, Any]
@@ -165,12 +165,35 @@ class ComfyUILtx25T2VProvider:
         self._render_root, self._ffprobe_path = render_root, ffprobe_path
         self._session = requests.Session()
 
-    def render(self, *, base_url: str, request: LtxT2VRequest, timeout_seconds: float = 1800.0) -> RenderResult:
+    def render(
+        self, *, base_url: str, request: LtxT2VRequest, timeout_seconds: float = 1800.0,
+        status_callback: Callable[[str, str | None, int | None, int | None, str | None], None] | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
+    ) -> RenderResult:
+        def report(phase: str, prompt_id: str | None = None) -> None:
+            if status_callback is not None:
+                status_callback(phase, prompt_id, None, None, None)
+
+        def cancelled() -> bool:
+            return cancel_requested is not None and cancel_requested()
+
+        def interrupt(prompt_id: str | None) -> None:
+            try:
+                if prompt_id:
+                    self._session.post(f"{normalized}/queue", json={"delete": [prompt_id]}, timeout=10.0, allow_redirects=False)
+                self._session.post(f"{normalized}/interrupt", json={}, timeout=10.0, allow_redirects=False)
+            except requests.RequestException:
+                pass
+
         try:
             normalized = require_loopback_http_url(base_url)
             if urlsplit(normalized).scheme != "http": raise ValueError
         except ValueError as exc:
             raise ProviderError("ComfyUI URL must be a loopback HTTP address.") from exc
+        report("Preparing")
+        if cancelled():
+            interrupt(None)
+            raise RenderCancelled("The render was cancelled by the user.")
         workflow = load_ltx_t2v_workflow(self._workflow_path)
         self._validate_runtime(normalized, workflow)
         client_id = uuid.uuid4().hex
@@ -184,8 +207,13 @@ class ComfyUILtx25T2VProvider:
             raise ProviderError("The local LTX T2V prompt could not be submitted.") from exc
         if not isinstance(prompt_id, str) or not prompt_id:
             raise ProviderError("Local ComfyUI did not return an LTX T2V prompt ID.")
+        report("Submitted", prompt_id)
         source: Path | None = None; deadline = started + timeout_seconds
         while time.monotonic() < deadline:
+            if cancelled():
+                interrupt(prompt_id)
+                raise RenderCancelled("The render was cancelled by the user.")
+            report("Sampling", prompt_id)
             try:
                 response = self._session.get(f"{normalized}/history/{quote(prompt_id, safe='')}", timeout=30.0, allow_redirects=False)
                 response.raise_for_status(); source = _discover_output(response.json(), prompt_id, self._output_root)
@@ -194,9 +222,11 @@ class ComfyUILtx25T2VProvider:
             if source is not None: break
             time.sleep(2.0)
         if source is None: raise ProviderError("The local LTX T2V render timed out.")
+        report("Verifying", prompt_id)
         video = probe_video(self._ffprobe_path, source)
         if (video.width, video.height, video.frame_count, video.audio_present) != (request.width, request.height, request.frame_count, True) or video.fps not in {"24", "24/1"} or abs(video.duration_seconds - request.duration_seconds) > .25:
             raise ProviderError("The LTX T2V output does not match the verified video and audio contract.")
+        report("Adopting render", prompt_id)
         directory, output, metadata = self._adopt(source, prompt_id, request, video, time.monotonic() - started, started_at, datetime.now(UTC))
         return RenderResult(prompt_id, source, directory, output, metadata, video)
 

@@ -17,26 +17,30 @@ class H3AudioGuidance:
 
 
 def compose_h3_prompt(original_prompt: str, guidance: H3AudioGuidance) -> str:
-    """Append predictable audio instructions without changing the user's prompt."""
+    """Append predictable audio instructions once, without changing user prose."""
     original = original_prompt.strip()
     if not original:
         raise ValueError("A scene prompt is required.")
 
     parts = [original]
+
+    def append_once(instruction: str) -> None:
+        if instruction.lower() not in original.lower() and all(instruction.lower() not in item.lower() for item in parts):
+            parts.append(instruction)
     custom = guidance.custom_instruction.strip()
     if guidance.mode == "silent":
         # Silence has deterministic precedence over every audio option and custom sound.
-        parts.append("No speech, no dialogue, no voices, no vocalizations, no music, no soundtrack, no background score, no singing, no musical elements, no ambient sound.")
+        append_once("No speech, no dialogue, no voices, no vocalizations, no music, no soundtrack, no background score, no singing, no musical elements, no ambient sound.")
     else:
         if guidance.mode == "natural_ambience":
-            parts.append("Natural environmental ambience appropriate to the scene.")
+            append_once("Natural environmental ambience appropriate to the scene.")
         # Dialogue intentionally adds no invented words and never suppresses user dialogue.
         if custom:
-            parts.append(custom)
+            append_once(custom)
         if guidance.no_speech:
-            parts.append("No speech, no dialogue, no voices, no vocalizations.")
+            append_once("No speech, no dialogue, no voices, no vocalizations.")
         if guidance.no_music:
-            parts.append("No music, no soundtrack, no background score, no singing, no musical elements.")
+            append_once("No music, no soundtrack, no background score, no singing, no musical elements.")
     return " ".join(parts)
 
 
