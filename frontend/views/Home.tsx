@@ -123,6 +123,7 @@ export function Home() {
   const [customSceneCount, setCustomSceneCount] = useState('')
   const [newProjectSequenceMode, setNewProjectSequenceMode] = useState<H3SequenceMode>('independent_shots')
   const [showNewProject, setShowNewProject] = useState(false)
+  const [openProjectMenuId, setOpenProjectMenuId] = useState<string | null>(null)
   const [renameTarget, setRenameTarget] = useState<H3Project | null>(null)
   const [renameValue, setRenameValue] = useState('')
   const [renameError, setRenameError] = useState<string | null>(null)
@@ -462,10 +463,20 @@ export function Home() {
   }
 
   const openRenameProject = (target: H3Project) => {
+    setOpenProjectMenuId(null)
     setRenameTarget(target)
     setRenameValue(target.name)
     setRenameError(null)
   }
+
+  useEffect(() => {
+    if (!openProjectMenuId) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenProjectMenuId(null)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [openProjectMenuId])
 
   const confirmRenameProject = async () => {
     if (!renameTarget) return
@@ -744,7 +755,7 @@ export function Home() {
   // commented migration reference. The extracted sidebar is the only rendered surface.
   void [Clapperboard, ChevronLeft, ChevronRight, Loader2, RotateCcw, Sparkles, Square, h3AudioSummary, H3_WORKFLOW_PROFILES, LTX_2_5_OFFICIAL_MODEL_PAGE, updateH3Project, installH3WorkflowProfile, H3ThemedSelect, runtimeError, ollamaLifecycle, sequenceStarting, workspaceError, fileActionMessage, ltx25Models, ltx25Importing, upscaling, promptAssistantMessage, promptSuggestion, clock, profileAspectRatios, profileResolutionMegapixels, viewedRun, importLtx25Models, upscaleActiveVersion, saveRuntimeSettings, startManagedRuntime, applyContinuePrevious, startSequence, stopSequence, miniMaxH3, miniMaxH3ModeOptions, phaseActive, activeVersionIndex, finalPrompt, selectVersionAt, updateDuration, updateAspectRatio, updateResolution]
 
-  return <div className="h3-director-ui h-screen overflow-hidden bg-[#07090d] text-zinc-100">
+  return <div onClick={() => setOpenProjectMenuId(null)} className="h3-director-ui h-screen overflow-hidden bg-[#07090d] text-zinc-100">
     <div className="grid h-full grid-cols-[250px_minmax(0,1fr)_360px] grid-rows-[minmax(0,1fr)_150px]">
       <aside className="row-span-2 flex min-h-0 flex-col border-r border-white/10 bg-[#0a0d12]">
         <div className="border-b border-white/10 px-5 py-5"><div className="flex items-center gap-3">
@@ -753,7 +764,7 @@ export function Home() {
         </div></div>
         <div className="min-h-0 flex-1 overflow-y-auto px-3 py-5">
           <div className="mb-3 flex items-center justify-between px-2"><span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Recent Projects</span><button onClick={() => setShowNewProject(true)} aria-label="New Project"><Plus className="h-4 w-4" /></button></div>
-          <div className="space-y-1">{projects.map(item => <div key={item.id} className={`group flex items-center gap-1 rounded-lg ${project?.id === item.id ? 'bg-amber-300/10 text-amber-200' : 'text-zinc-400 hover:bg-white/5'}`}><button onClick={() => void getH3Project(item.id).then(replaceProject)} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left text-sm"><Folder className="h-4 w-4" /><span className="truncate">{item.name}</span></button><details className="relative mr-2"><summary aria-label={`Project actions for ${item.name}`} className="cursor-pointer list-none rounded px-1.5 py-1 text-zinc-500 hover:bg-white/10 hover:text-white">⋯</summary><div className="absolute right-0 z-30 mt-1 w-40 rounded-lg border border-white/10 bg-[#11151c] p-1 text-xs shadow-xl"><button onClick={() => openRenameProject(item)} className="block w-full rounded px-2 py-2 text-left hover:bg-white/10">Rename</button><button onClick={() => void window.electronAPI.showItemInFolder({ filePath: item.project_root })} className="block w-full rounded px-2 py-2 text-left hover:bg-white/10">Open Project Folder</button><button onClick={() => { if (!window.confirm(`Move “${item.name}” to H3 Director Trash?`)) return; void deleteH3Project(item.id).then(async () => { const remaining = projects.filter(candidate => candidate.id !== item.id); setProjects(remaining); if (project?.id === item.id) { if (remaining[0]) replaceProject(await getH3Project(remaining[0].id)); else setProject(null) } }).catch(error => setWorkspaceError(error instanceof Error ? error.message : 'Project deletion failed.')) }} className="block w-full rounded px-2 py-2 text-left text-red-300 hover:bg-red-400/10">Delete Project</button></div></details></div>)}</div>
+          <div className="space-y-1">{projects.map(item => <div key={item.id} className={`group flex items-center gap-1 rounded-lg ${project?.id === item.id ? 'bg-amber-300/10 text-amber-200' : 'text-zinc-400 hover:bg-white/5'}`}><button onClick={() => { setOpenProjectMenuId(null); void getH3Project(item.id).then(replaceProject) }} className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left text-sm"><Folder className="h-4 w-4" /><span className="truncate">{item.name}</span></button><div className="relative mr-2"><button type="button" aria-label={`Project actions for ${item.name}`} aria-expanded={openProjectMenuId === item.id} onClick={event => { event.stopPropagation(); setOpenProjectMenuId(current => current === item.id ? null : item.id) }} className="cursor-pointer rounded px-1.5 py-1 text-zinc-500 hover:bg-white/10 hover:text-white">⋯</button>{openProjectMenuId === item.id && <div onClick={event => event.stopPropagation()} className="absolute right-0 z-30 mt-1 w-40 rounded-lg border border-white/10 bg-[#11151c] p-1 text-xs shadow-xl"><button onClick={() => openRenameProject(item)} className="block w-full rounded px-2 py-2 text-left hover:bg-white/10">Rename</button><button onClick={() => { setOpenProjectMenuId(null); void window.electronAPI.showItemInFolder({ filePath: item.project_root }) }} className="block w-full rounded px-2 py-2 text-left hover:bg-white/10">Open Project Folder</button><button onClick={() => { setOpenProjectMenuId(null); if (!window.confirm(`Move “${item.name}” to H3 Director Trash?`)) return; void deleteH3Project(item.id).then(async () => { const remaining = projects.filter(candidate => candidate.id !== item.id); setProjects(remaining); if (project?.id === item.id) { if (remaining[0]) replaceProject(await getH3Project(remaining[0].id)); else setProject(null) } }).catch(error => setWorkspaceError(error instanceof Error ? error.message : 'Project deletion failed.')) }} className="block w-full rounded px-2 py-2 text-left text-red-300 hover:bg-red-400/10">Delete Project</button></div>}</div></div>)}</div>
           {!projects.length && <p className="px-3 py-4 text-xs leading-5 text-zinc-600">Create a disk-backed local project to begin.</p>}
           <div className="mt-8 px-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-zinc-500">Assets</div>
           <button onClick={() => void chooseReferenceImage()} disabled={!scene} className="mt-3 flex w-full items-center gap-3 rounded-lg border border-dashed border-white/10 px-3 py-3 text-left text-xs text-zinc-500 disabled:opacity-30"><ImagePlus className="h-4 w-4" />{scene?.reference_image ? 'Replace reference' : 'Add reference image'}</button>

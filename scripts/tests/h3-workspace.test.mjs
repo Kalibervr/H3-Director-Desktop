@@ -204,6 +204,18 @@ test('workspace exposes persistent multi-scene creation and storyboard operation
   assert.match(storyboard, /overflow-x-auto/)
 })
 
+test('project overflow menus use one dismissible React-controlled surface', () => {
+  const home = read('frontend/views/Home.tsx')
+  assert.match(home, /const \[openProjectMenuId, setOpenProjectMenuId\] = useState<string \| null>\(null\)/)
+  assert.match(home, /setOpenProjectMenuId\(current => current === item\.id \? null : item\.id\)/)
+  assert.match(home, /onClick=\{\(\) => setOpenProjectMenuId\(null\)\}/)
+  assert.match(home, /event\.stopPropagation\(\)/)
+  assert.match(home, /if \(event\.key === 'Escape'\) setOpenProjectMenuId\(null\)/)
+  assert.match(home, /setOpenProjectMenuId\(null\); void getH3Project\(item\.id\)/)
+  assert.match(home, /setOpenProjectMenuId\(null\); void window\.electronAPI\.showItemInFolder/)
+  assert.match(home, /const openRenameProject = \(target: H3Project\) => \{\s*setOpenProjectMenuId\(null\)/)
+})
+
 test('workspace exposes manual continuity with ordered queue controls', () => {
   const home = read('frontend/views/Home.tsx')
   const projectClient = read('frontend/lib/h3-projects.ts')
